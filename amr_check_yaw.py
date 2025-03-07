@@ -11,9 +11,9 @@ import pandas as pd
 from natsort import natsorted
 from tqdm import tqdm
 import numpy as np
+from quaternion2euler import quaternion2euler
 
 # In[2]:
-
 
 def main():
     # Data path
@@ -31,7 +31,7 @@ def main():
     position_data = read_positions(json_files, save_path)
 
 
-# In[3]:
+# In[3]: Load JSON files
 
 
 def load_json_files(path_to_jsons, frame_step):
@@ -71,16 +71,12 @@ def load_json_files(path_to_jsons, frame_step):
 def unity_quaternion_to_ros_yaw(q_unity):
     """ Convert Unity quaternion (x, y, z, w) to ROS quaternion (x, z, y, w) """
     x, y, z, w = q_unity
-    q_ros = np.array([x, z, y, w])
+    #q_ros = np.array([x, y, z, w])
 
-    """ Convert ROS quaternion to a 2D yaw in the x-y plane. """
-    heading = np.arctan2(2 * (q_ros[3] * q_ros[2] + q_ros[0] * q_ros[1]), 1 - 2 * ( q_ros[1]**2 +  q_ros[2]**2))
-    dy = np.cos(heading)
-    dx = np.sin(heading)
-
-    yaw = np.arctan2(dx,dy)
-
-    return yaw
+    """ Get Euler Angles """
+    euler = quaternion2euler(x,z,y,w)
+    
+    return euler[2]     # yaw
 
 
 # %% Extract positions and yaw 

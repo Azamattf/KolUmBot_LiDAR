@@ -18,7 +18,20 @@ def quaternion2euler (x, y, z, w):
         - The function handles singularities at the north and south poles.
         - The input quaternion does not need to be normalized.
     """
+
+    def NormalizeAngle (angle):
+        while (angle>2*np.pi):
+            angle -= 2*np.pi
+        while (angle<0):
+            angle += 2*np.pi
+        return angle
     
+    def NormalizeAngles (angles):
+        angles[0] = NormalizeAngle (angles[0])
+        angles[1] = NormalizeAngle (angles[1])
+        angles[2] = NormalizeAngle (angles[2])
+        return angles    
+
     sqw = w * w
     sqx = x * x
     sqy = y * y
@@ -49,15 +62,5 @@ def quaternion2euler (x, y, z, w):
     v[2] = math.atan2 (2 * x_new * y_new + 2 * z_new * w_new, 1 - 2 * (y_new * y_new + z_new * z_new))      # Roll
     return NormalizeAngles (v)
 
-def NormalizeAngles (angles):
-    angles[0] = NormalizeAngle (angles[0])
-    angles[1] = NormalizeAngle (angles[1])
-    angles[2] = NormalizeAngle (angles[2])
-    return angles
 
-def NormalizeAngle (angle):
-    while (angle>2*np.pi):
-        angle -= 2*np.pi
-    while (angle<0):
-        angle += 2*np.pi
-    return angle
+
