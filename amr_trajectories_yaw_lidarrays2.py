@@ -1,384 +1,410 @@
 import os
 import json
+import numpy as np
 import plotly.graph_objects as go
-import pandas as pd
 from natsort import natsorted
 from collections import defaultdict
 from tqdm import tqdm
-import numpy as np
 from scipy.spatial.transform import Rotation
 
 
 def main():
-    # Data path
+    # Data paths
     path_to_dataset = "d:\\Works_Experience\\FML_Florian\\Kolumbot\\Lidar_visualization\\Unity_v3s\\"
     path_to_images = os.path.join(path_to_dataset, "sequence.0_json_only")
     save_path = os.path.join(path_to_dataset, "Export")
     path_to_sem_def = os.path.join(path_to_dataset, "class_definition_semantic_segmentation.json")
-    
-    # Process JSON files
-    frame_step = 50
+      
+    # Processing parameters
+    frame_step = 10
+
+    # Load and process data
     json_files = load_json_files(path_to_images, frame_step)
-    
-    # Load class definitions for point cloud coloring
-    class_colors = load_class_colors(path_to_sem_def)
-    
-    # Extract data from JSON files
-    position_data = read_data(json_files)
-    
-    # Animate robot movement and point clouds
-    animation = AMRAnimation(position_data, class_colors)
-    animation.create_animation(save_path)
+    robot_data = read_data(json_files, save_path)
+    class_def = load_class_definitions(path_to_sem_def)
+
+    # Create visualization
+    visualizer = Visualizer(robot_data, class_def)
+    visualizer.animate()
+    visualizer.save_animation(save_path)
 
 
-class AMR:
-    def __init__(self, name, data, color):
-        self.name = name
-        self.color = color
-        self.timestamps = data["timestamps"]
-        self.positions = data["robot_positions"]
-        self.orientations = data["robot_orientations"]
-        self.pointclouds = data["pointclouds"]
-        self.x_values = []
-        self.y_values = []
+def load_class_definitions(filepath):
+    with open(filepath, 'r') as f:
+        class_def = json.load(f)
     
-    def get_trace(self):
-        # Create an initial trace for the AMR's path
-        return go.Scatter(x=[], y=[], mode="lines+markers", name=self.name,
-                         line=dict(color=self.color), marker=dict(color=self.color))
+    # Create color mapping from class labels to RGB values
+    color_map = {}
+    for entry in class_def.get("m_LabelEntries", []):
+        label = entry.get("label", "unknown")
+        r = int(entry.get("color", {}).get("r", 0) * 255)
+        g = int(entry.get("color", {}).get("g", 0) * 255)
+        b = int(entry.get("color", {}).get("b", 0) * 255)
+        a = entry.get("color", {}).get("a", 1.0)
+        color_map[label] = f'rgba({r},{g},{b},{a})'
     
-    def get_position_at_frame(self, frame_idx):
-        # Get position and orientation at a specific frame
-        if frame_idx < len(self.positions):
-            x, y = self.positions[frame_idx]
-            yaw_x, yaw_y = self.orientations[frame_idx]
-            timestamp = self.timestamps[frame_idx]
-            return x, y, yaw_x, yaw_y, timestamp
-        elif len(self.positions) > 0:
-            # Return last known position if beyond trajectory
-            x, y = self.positions[-1]
-            yaw_x, yaw_y = self.orientations[-1]
-            timestamp = self.timestamps[-1]
-            return x, y, yaw_x, yaw_y, timestamp
-        else:
-            # Fallback if trajectory is empty
-            return 0, 0, 0, 0, 0
-    
-    def get_pointcloud_at_frame(self, frame_idx):
-        # Get the point cloud data at a specific frame
-        if frame_idx < len(self.pointclouds):
-            return self.pointclouds[frame_idx]
-        return []
-    
-    def create_robot_shape(self, x, y, yaw_x, yaw_y, size=1.0):
-        # Create a rotated rectangle to represent the robot
-        angle = np.arctan2(yaw_y, yaw_x)
-        
-        # Rectangle dimensions
-        length = size * 2.0  # Robot length
-        width = size * 1.5   # Robot width
-        
-        # Calculate corners of the rectangle
-        corners = np.array([
-            [-length/2, -width/2],  # back left
-            [length/2, -width/2],   # front left
-            [length/2, width/2],    # front right
-            [-length/2, width/2],   # back right
-            [-length/2, -width/2]   # back left (close the shape)
-        ])
-        
-        # Rotate the corners
-        rot_matrix = np.array([
-            [np.cos(angle), -np.sin(angle)],
-            [np.sin(angle), np.cos(angle)]
-        ])
-        rotated_corners = np.dot(corners, rot_matrix.T)
-        
-        # Translate to position
-        rotated_corners[:, 0] += x
-        rotated_corners[:, 1] += y
-        
-        return rotated_corners
-        
-    def get_frame(self, frame_idx, class_colors):
-        # Generate a frame showing the AMR's position and point cloud
-        traces = []
-        
-        # Update position history up to this frame
-        self.x_values = []
-        self.y_values = []
-        
-        for i in range(min(frame_idx + 1, len(self.positions))):
-            x, y = self.positions[i]
-            self.x_values.append(x)
-            self.y_values.append(y)
-            
-        # Create a trace for the path
-        path_trace = go.Scatter(
-            x=self.x_values, y=self.y_values, mode="lines",
-            line=dict(color=self.color, width=2), 
-            name=f"{self.name} Path",
-            hoverinfo="none"
-        )
-        traces.append(path_trace)
-        
-        # Get current position and orientation
-        current_x, current_y, yaw_x, yaw_y, _ = self.get_position_at_frame(frame_idx)
-        
-        # Create a trace for the robot's current position as a rotated shape
-        if current_x is not None and current_y is not None and yaw_x is not None and yaw_y is not None:
-            robot_shape = self.create_robot_shape(current_x, current_y, yaw_x, yaw_y)
-            
-            robot_trace = go.Scatter(
-                x=robot_shape[:, 0], y=robot_shape[:, 1], 
-                mode="lines+fill", fill="toself",
-                fillcolor=self.color, line=dict(color="black", width=1),
-                name=f"{self.name}"
-            )
-            traces.append(robot_trace)
-        
-        # Add point cloud data
-        pointcloud = self.get_pointcloud_at_frame(frame_idx)
-        
-        # Group point cloud by class for efficient rendering
-        points_by_class = defaultdict(lambda: {"x": [], "y": []})
-        
-        for point in pointcloud:
-            class_id = point["class"]
-            points_by_class[class_id]["x"].append(point["x"])
-            points_by_class[class_id]["y"].append(point["y"])
-        
-        # Create a trace for each point cloud class
-        for class_id, points in points_by_class.items():
-            # Get color for this class or use a default if not found
-            point_color = class_colors.get(class_id, "gray")
-            
-            point_trace = go.Scatter(
-                x=points["x"], y=points["y"], 
-                mode="markers",
-                marker=dict(color=point_color, size=3, opacity=0.7),
-                name=f"Class {class_id}",
-                hoverinfo="none"
-            )
-            traces.append(point_trace)
-            
-        return traces
+    return color_map
 
 
-class AMRAnimation:
-    def __init__(self, robot_data, class_colors, fps=5, frame_step=1):
+class Visualizer:
+    def __init__(self, robot_data, class_color_map):
         self.robot_data = robot_data
-        self.class_colors = class_colors
-        self.fps = fps
-        self.frame_step = frame_step
-        self.amrs = self.create_amrs()
-        self.x_range, self.y_range = self.compute_limits()
-        self.max_frames = max(len(data["timestamps"]) for data in self.robot_data.values())
+        self.class_color_map = class_color_map
+        self.fig = go.Figure()
         
-    def create_amrs(self):
-        color_palette = ["blue", "red", "green", "purple", "orange", "brown", "cyan", "magenta"]
-        return [AMR(name, data, color_palette[i % len(color_palette)]) 
-                for i, (name, data) in enumerate(self.robot_data.items())]
-    
-    def compute_limits(self):
-        # Find x and y limits across all robot positions
-        x_positions = []
-        y_positions = []
+        # Define unique colors for each robot
+        self.robot_colors = {
+            robot_id: f'rgb({hash(robot_id) % 200},{(hash(robot_id) * 13) % 200},{(hash(robot_id) * 29) % 200})'
+            for robot_id in robot_data.keys()
+        }
         
-        for data in self.robot_data.values():
-            for pos in data["robot_positions"]:
-                if pos[0] is not None and pos[1] is not None:
-                    x_positions.append(pos[0])
-                    y_positions.append(pos[1])
+        self.robot_shapes = {}  # Store robot shape traces
+        self.robot_paths = {}   # Store robot path traces
+        self.pointcloud_traces = {}  # Store pointcloud traces
         
-        # Add buffer space
-        buffer = 10
-        x_min, x_max = min(x_positions) - buffer, max(x_positions) + buffer
-        y_min, y_max = min(y_positions) - buffer, max(y_positions) + buffer
+        # Get common timestamps across all robots (assuming all robots have the same timestamps)
+        self.time_stamps = sorted(list(robot_data.values())[0]["timestamps"])
         
-        return (x_min, x_max), (y_min, y_max)
-    
-    def get_timestamp_at_frame(self, frame_idx):
-        if self.amrs:
-            _, _, _, _, timestamp = self.amrs[0].get_position_at_frame(frame_idx)
-            return timestamp
-        return 0
-    
-    def format_timestamp(self, timestamp):
-        minutes = int(timestamp // 60)
-        seconds = int(timestamp % 60)
-        return f"{minutes:02d}:{seconds:02d}"
-    
-    def create_animation(self, save_path):
-        # Get initial traces for all AMRs
-        initial_traces = []
-        for amr in self.amrs:
-            initial_traces.extend(amr.get_frame(0, self.class_colors))
+    def create_robot_shape(self, x, y, orientation, robot_id, size=0.5):
+        """Create a trapezoid shape for the robot with the narrow end as the front."""
+        # Calculate trapezoid corners based on orientation
+        angle = np.arctan2(orientation[1], orientation[0])
         
+        # Define trapezoid points (narrower at the front)
+        front_width = size * 0.6
+        back_width = size * 1.2
+        length = size * 2
+        
+        # Calculate corner points (Unity coordinate system)
+        front_left = [x + length/2 * np.cos(angle) - front_width/2 * np.sin(angle),
+                     y + length/2 * np.sin(angle) + front_width/2 * np.cos(angle)]
+        front_right = [x + length/2 * np.cos(angle) + front_width/2 * np.sin(angle),
+                      y + length/2 * np.sin(angle) - front_width/2 * np.cos(angle)]
+        back_left = [x - length/2 * np.cos(angle) - back_width/2 * np.sin(angle),
+                    y - length/2 * np.sin(angle) + back_width/2 * np.cos(angle)]
+        back_right = [x - length/2 * np.cos(angle) + back_width/2 * np.sin(angle),
+                     y - length/2 * np.sin(angle) - back_width/2 * np.cos(angle)]
+        
+        # Complete the shape by returning to the first point
+        points_x = [front_left[0], front_right[0], back_right[0], back_left[0], front_left[0]]
+        points_y = [front_left[1], front_right[1], back_right[1], back_left[1], front_left[1]]
+        
+        return points_x, points_y
+
+    def map_classes_to_colors(self, class_labels):
+        """Map pointcloud classes to colors using the semantic segmentation definitions."""
+        class_colors = []
+        for label in class_labels:
+            # Use the color map, default to gray if class not found
+            color = self.class_color_map.get(label, 'rgba(150, 150, 150, 0.7)')
+            class_colors.append(color)
+        return class_colors
+
+    def animate(self):
+        """Create animation with robot movements and LiDAR pointclouds."""
+        # First, compute the bounds across ALL frames and robots
+        all_x = []
+        all_z = []
+        
+        for robot_id, data in self.robot_data.items():
+            # Get all robot positions across all frames
+            all_x.extend([pos[0] for pos in data["robot_positions"]])
+            all_z.extend([pos[1] for pos in data["robot_positions"]])
+            
+            # Include pointcloud data from all frames
+            for pointcloud in data["pointclouds"]:
+                all_x.extend([p["x"] for p in pointcloud])
+                all_z.extend([p["z"] for p in pointcloud])
+        
+        # Calculate fixed bounds with 10% padding
+        x_min, x_max = min(all_x), max(all_x)
+        z_min, z_max = min(all_z), max(all_z)
+        
+        x_range = x_max - x_min
+        z_range = z_max - z_min
+        x_padding = x_range * 0.1
+        z_padding = z_range * 0.1
+        
+        # Fixed axis ranges with padding
+        x_axis_range = [x_min - x_padding, x_max + x_padding]
+        z_axis_range = [z_min - z_padding, z_max + z_padding]
+        
+        # The proper ordering to ensure robots appear on top is to add traces in this order:
+        # 1. First all pointcloud traces
+        # 2. Then all path traces
+        # 3. Finally all robot shape traces
+        
+        # Initialize pointcloud traces first
+        for robot_id, data in self.robot_data.items():
+            # Initial pointcloud data
+            pointclouds = data["pointclouds"][0]
+            pointcloud_x = [p["x"] for p in pointclouds]
+            pointcloud_z = [p["z"] for p in pointclouds]
+            pointcloud_classes = [p.get("class", "unknown") for p in pointclouds]
+            colors = self.map_classes_to_colors(pointcloud_classes)
+            
+            # Add pointcloud trace
+            self.pointcloud_traces[robot_id] = go.Scatter(
+                x=pointcloud_x,
+                y=pointcloud_z,
+                mode="markers",
+                marker=dict(
+                    color=colors,
+                    size=4,
+                    opacity=0.7
+                ),
+                name=f"{robot_id} (LiDAR)",
+                showlegend=False
+            )
+            self.fig.add_trace(self.pointcloud_traces[robot_id])
+        
+        # Then initialize path traces
+        for robot_id, data in self.robot_data.items():
+            robot_color = self.robot_colors[robot_id]
+            initial_pos = data["robot_positions"][0]
+            
+            # Add robot path trace (initially empty)
+            self.robot_paths[robot_id] = go.Scatter(
+                x=[initial_pos[0]],
+                y=[initial_pos[1]],
+                mode="lines",
+                line=dict(color=robot_color, width=2, dash='dash'),
+                name=f"{robot_id} (Path)",
+                showlegend=False
+            )
+            self.fig.add_trace(self.robot_paths[robot_id])
+        
+        # Finally initialize robot shape traces
+        for robot_id, data in self.robot_data.items():
+            robot_color = self.robot_colors[robot_id]
+            
+            # Initial position and orientation
+            initial_pos = data["robot_positions"][0]
+            initial_orient = data["robot_orientations"][0]
+            
+            # Create robot shape (trapezoid)
+            shape_x, shape_y = self.create_robot_shape(
+                initial_pos[0], initial_pos[1], initial_orient, robot_id
+            )
+            
+            # Add robot shape trace - ensure the fillcolor matches the robot_color
+            self.robot_shapes[robot_id] = go.Scatter(
+                x=shape_x,
+                y=shape_y,
+                fill="toself",
+                fillcolor=robot_color,  # Ensure matching color with path
+                line=dict(color='black', width=1),
+                name=f"{robot_id} (Robot)",
+                text=robot_id,
+                hoverinfo="text"
+            )
+            self.fig.add_trace(self.robot_shapes[robot_id])
+        
+        # Create frames for animation
         frames = []
-        slider_steps = []
-        
-        for frame_idx in range(0, self.max_frames, self.frame_step):
-            # Get updated traces for all AMRs including point clouds
+        for frame_idx, timestamp in enumerate(self.time_stamps):
             frame_data = []
-            for amr in self.amrs:
-                frame_data.extend(amr.get_frame(frame_idx, self.class_colors))
             
-            # Get timestamp for this frame
-            timestamp = self.get_timestamp_at_frame(frame_idx)
-            formatted_time = self.format_timestamp(timestamp)
-            frame_name = f"Frame_{frame_idx}"
+            # Follow the same ordering in each frame: pointclouds first, then paths, then robots
+            # First add all pointcloud traces for this frame
+            for robot_id, data in self.robot_data.items():
+                # Update pointcloud
+                pointclouds = data["pointclouds"][frame_idx]
+                pointcloud_x = [p["x"] for p in pointclouds]
+                pointcloud_z = [p["z"] for p in pointclouds]
+                pointcloud_classes = [p.get("class", "unknown") for p in pointclouds]
+                colors = self.map_classes_to_colors(pointcloud_classes)
+                
+                frame_data.append(
+                    go.Scatter(
+                        x=pointcloud_x,
+                        y=pointcloud_z,
+                        mode="markers",
+                        marker=dict(
+                            color=colors,
+                            size=4,
+                            opacity=0.7
+                        ),
+                        name=f"{robot_id} (LiDAR)",
+                        showlegend=False
+                    )
+                )
             
-            # Create time annotation
-            time_annotation = {
-                "text": f"Time: {timestamp:.2f} s",
-                "xref": "paper", "yref": "paper",
-                "x": 0.95, "y": 0.95,
-                "showarrow": False,
-                "font": {"size": 14, "color": "black"},
-                "bgcolor": "white",
-                "bordercolor": "black",
-                "borderwidth": 1
-            }
+            # Then add all path traces
+            for robot_id, data in self.robot_data.items():
+                robot_color = self.robot_colors[robot_id]
+                
+                # Collect all positions up to current frame for path
+                path_x = [pos[0] for pos in data["robot_positions"][:frame_idx+1]]
+                path_y = [pos[1] for pos in data["robot_positions"][:frame_idx+1]]
+                
+                frame_data.append(
+                    go.Scatter(
+                        x=path_x,
+                        y=path_y,
+                        mode="lines",
+                        line=dict(color=robot_color, width=2, dash='dash'),
+                        name=f"{robot_id} (Path)",
+                        showlegend=False
+                    )
+                )
             
-            # Create the frame
-            frames.append(
-                go.Frame(
-                    data=frame_data,
-                    name=frame_name,
-                    layout=dict(annotations=[time_annotation])
-                ))
+            # Finally add all robot shapes
+            for robot_id, data in self.robot_data.items():
+                robot_color = self.robot_colors[robot_id]
+                
+                # Robot position and orientation for this frame
+                robot_pos = data["robot_positions"][frame_idx]
+                robot_orient = data["robot_orientations"][frame_idx]
+                
+                # Update robot shape
+                shape_x, shape_y = self.create_robot_shape(
+                    robot_pos[0], robot_pos[1], robot_orient, robot_id
+                )
+                
+                frame_data.append(
+                    go.Scatter(
+                        x=shape_x,
+                        y=shape_y,
+                        fill="toself",
+                        fillcolor=robot_color,  # Use same color as the path
+                        line=dict(color='black', width=1),
+                        name=f"{robot_id} (Robot)",
+                        text=f"{robot_id} @ {timestamp}",
+                        hoverinfo="text"
+                    )
+                )
             
-            # Create slider step
-            slider_steps.append({
-                "args": [[frame_name], {"frame": {"duration": 1000 // self.fps, "redraw": True}, "mode": "immediate"}],
-                "label": formatted_time,
-                "method": "animate"
-            })
+            # Create frame with all data - ENSURE FIXED AXES in every frame
+            frame = go.Frame(
+                data=frame_data,
+                name=str(timestamp),
+                layout=go.Layout(
+                    xaxis=dict(range=x_axis_range, fixedrange=True),  # Add fixedrange=True
+                    yaxis=dict(range=z_axis_range, fixedrange=True)   # Add fixedrange=True
+                )
+            )
+            frames.append(frame)
         
-        # Create the figure
-        fig = go.Figure(
-            data=initial_traces,
-            layout=go.Layout(
-                title="AMR Animation with Point Cloud",
-                xaxis=dict(
-                    title="X Position",
-                    range=self.x_range,
-                    zeroline=True,
-                    scaleanchor="y",
-                    scaleratio=1,
-                    fixedrange=True
-                ),
-                yaxis=dict(
-                    title="Y Position",
-                    range=self.y_range,
-                    zeroline=True,
-                    scaleanchor="x",
-                    scaleratio=1,
-                    fixedrange=True
-                ),
-                updatemenus=[
+        # Add frames to figure
+        self.fig.frames = frames
+        
+        # Add animation controls
+        self.fig.update_layout(
+            updatemenus=[{
+                'type': 'buttons',
+                'buttons': [
                     {
-                        "type": "buttons",
-                        "buttons": [
-                            {
-                                "args": [None, {
-                                    "frame": {"duration": 1000 // self.fps, "redraw": True},
-                                    "fromcurrent": True,
-                                    "transition": {"duration": 500, "easing": "cubic-in-out"}
-                                }],
-                                "label": "Play",
-                                "method": "animate"
-                            },
-                            {
-                                "args": [[None], {"frame": {"duration": 0, "redraw": True}, "mode": "immediate"}],
-                                "label": "Pause",
-                                "method": "animate"
-                            }
-                        ],
-                        "direction": "left",
-                        "showactive": True,
-                        "x": 0.1,
-                        "xanchor": "right",
-                        "y": 0.05,
-                        "yanchor": "bottom",
-                        "pad": {"t": 10, "r": 10},
-                        "bgcolor": "lightgray",
-                        "bordercolor": "gray",
-                        "borderwidth": 1
+                        'args': [None, {'frame': {'duration': 300, 'redraw': True}, 'fromcurrent': True}],
+                        'label': 'Play',
+                        'method': 'animate'
+                    },
+                    {
+                        'args': [[None], {'frame': {'duration': 0, 'redraw': True}, 'mode': 'immediate'}],
+                        'label': 'Pause',
+                        'method': 'animate'
                     }
                 ],
-                sliders=[{
-                    "steps": slider_steps,
-                    "currentvalue": {"prefix": "Time: ", "visible": True, "xanchor": "right"}
-                }],
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
-                )
-            ),
-            frames=frames
+                'direction': 'left',
+                'pad': {'r': 10, 't': 10},
+                'showactive': False,
+                'type': 'buttons',
+                'x': 0.1,
+                'xanchor': 'right',
+                'y': 0,
+                'yanchor': 'top'
+            }],
+            sliders=[{
+                'active': 0,
+                'steps': [{
+                    'args': [[f.name], {'frame': {'duration': 300, 'redraw': True}, 'mode': 'immediate'}],
+                    'label': f.name,
+                    'method': 'animate'
+                } for f in frames],
+                'x': 0.1,
+                'xanchor': 'left',
+                'y': 0,
+                'yanchor': 'top'
+            }]
         )
         
-        fig.show()
-        
-        # Save animation as HTML
-        os.makedirs(save_path, exist_ok=True)
-        filepath = os.path.join(save_path, "AMR_Animation_with_PointCloud.html")
-        fig.write_html(filepath)
+        # Set up layout for Unity coordinates with fixed axis ranges
+        self.fig.update_layout(
+            title="AMR Movement with LiDAR Data (Unity Coordinates)",
+            xaxis=dict(
+                title="X Position (Unity)",
+                range=x_axis_range,  # Fixed range with padding
+                scaleanchor="y",
+                scaleratio=1,
+                fixedrange=True,     # Add fixedrange=True to prevent zoom
+                constrain="domain"   # Add constraint to maintain aspect ratio
+            ),
+            yaxis=dict(
+                title="Z Position (Unity)",  # Z is up in Unity's coordinate system
+                range=z_axis_range,  # Fixed range with padding
+                fixedrange=True,     # Add fixedrange=True to prevent zoom
+                constrain="domain"   # Add constraint to maintain aspect ratio
+            ),
+            legend=dict(
+                x=1.05,
+                y=1,
+                xanchor='left',
+                yanchor='top'
+            ),
+            margin=dict(l=20, r=20, t=30, b=20),
+            plot_bgcolor='rgba(240, 240, 240, 0.8)',
+            height=800,
+            width=1000,
+            scene_aspectmode='data',  # Preserve aspect ratio
+            dragmode=False            # Disable dragging to prevent repositioning
+        )
+
+    def save_animation(self, savepath):
+        """Save the animation to an HTML file."""
+        os.makedirs(savepath, exist_ok=True)
+        filepath = os.path.join(savepath, "AMR_Animation_with_LiDAR_Tracking.html")
+        self.fig.write_html(filepath, auto_play=False)
+        print(f"\n✅ Animation saved to {filepath}")
 
 
-def load_class_colors(path_to_sem_def):
-    """Load class definitions and assign colors to each class ID"""
-    try:
-        with open(path_to_sem_def, 'r') as f:
-            class_def = json.load(f)
-            
-        # Create a color mapping for each class
-        color_map = {}
-        
-        for i, entry in enumerate(class_def.get("m_LabelEntries", [])):
-            # Extract RGBA color from the definition
-            rgba = entry.get("color", {"r": 0, "g": 0, "b": 0, "a": 1})
-            
-            # Convert to RGB hex string for Plotly
-            r = int(rgba["r"] * 255)
-            g = int(rgba["g"] * 255)
-            b = int(rgba["b"] * 255)
-            
-            color_hex = f"rgb({r},{g},{b})"
-            
-            # Map class ID to color and name
-            color_map[i] = color_hex
-            
-        return color_map
-    except Exception as e:
-        print(f"Error loading class definitions: {e}")
-        # Return default colors if file can't be loaded
-        return {i: f"hsl({(i * 30) % 360}, 70%, 50%)" for i in range(20)}
+def transform_lidar_points(
+    ranges: np.ndarray,
+    angles: np.ndarray,
+    lidar_position: np.ndarray,
+    lidar_quaternion: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Transform lidar points from local to global Unity coordinate system."""
+    # 1. Convert polar to local Cartesian coordinates (in Unity coordinates)
+    theta_rad = np.deg2rad(angles)
+    x_local = ranges * np.cos(theta_rad)
+    z_local = ranges * np.sin(theta_rad)
+    
+    # Stack coordinates and add y=0 for 3D rotation (Unity uses XYZ where Y is up)
+    points_local = np.vstack((x_local, np.zeros_like(x_local), z_local)).T
+    
+    # 2. Create rotation from quaternion
+    R = Rotation.from_quat(lidar_quaternion)
+    
+    # 3. Apply rotation
+    points_rotated = R.apply(points_local)
+    
+    # 4. Apply translation
+    x_global = points_rotated[:, 0] + lidar_position[0]
+    z_global = points_rotated[:, 2] + lidar_position[2]
+    
+    return x_global, z_global
 
 
 def load_json_files(path_to_jsons, frame_step):
+    """Load JSON files from the specified directory with given frame step."""
     data = []
     json_files = [f for f in natsorted(os.listdir(path_to_jsons)) if f.endswith(".json")]
-    sampled_files = json_files[::frame_step]  # Sample files based on frame_step
-
-    # Check first 5 file names
-    print("\nFirst 5 files:")
-    print(f"{json_files[:5]} ...")  # Print first 5 positions for each robot
-
+    sampled_files = json_files[::frame_step]
+    
     print("\nFirst 5 sampled files:")
-    print(f"{sampled_files[:5]} ...")  # Print first 5 positions for each robot
+    print(f"{sampled_files[:5]} ...")
 
-    print("")
-
-    for i, filename in tqdm(list(enumerate(json_files)), ascii="░▒█", desc="Loading JSON files", unit=" file"):
-        if i % frame_step != 0:  # Skip frames based on step
-            continue
-
+    for i, filename in tqdm(list(enumerate(sampled_files)), ascii="░▒█", desc="Loading JSON files", unit=" file"):
         file_path = os.path.join(path_to_jsons, filename)
 
         with open(file_path, "r", encoding='utf-8') as f:
@@ -393,41 +419,11 @@ def load_json_files(path_to_jsons, frame_step):
     return data
 
 
-def transform_lidar_points(
-    ranges: np.ndarray,
-    angles: np.ndarray,
-    lidar_position: np.ndarray,
-    lidar_quaternion: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-
-    # 1. Convert polar to local Cartesian coordinates
-    theta_rad = np.deg2rad(angles)
-    x_local = ranges * np.cos(theta_rad)
-    z_local = ranges * np.sin(theta_rad)
+def read_data(data, savepath, filename="robot_lidar_data.json"):
+    """Extract robot positions, orientations, and pointcloud data from JSON files.
     
-    # Stack coordinates and add y=0 for 3D rotation
-    points_local = np.vstack((x_local, np.zeros_like(x_local), z_local))
-    
-    # 2. Create rotation from quaternion
-    R = Rotation.from_quat(lidar_quaternion)
-    
-    # 3. Apply rotation
-    points_rotated = R.apply(points_local.T)
-    
-    # 4. Apply translation
-    x_global = points_rotated[:, 0] + lidar_position[0]
-    # y_global = points_rotated[:, 1] + lidar_position[1]
-    z_global = points_rotated[:, 2] + lidar_position[2]
-    
-    # 5. Convert to ROS coordinate system
-    x_ros = x_global
-    y_ros = z_global
-    # z_ros = y_global  # Unity Y -> ROS Z
-    
-    return x_ros, y_ros
-
-
-def read_data(data):
+    Note: Using Unity coordinate system where X-Z is the floor plane and Y is up.
+    """
     robot_data = defaultdict(lambda: {
         "timestamps": [],
         "robot_positions": [],
@@ -435,83 +431,85 @@ def read_data(data):
         "pointclouds": []
     })
 
-    for frame_index, frame in tqdm(enumerate(data), ascii="░▒█", desc="Processing JSON files", unit="file"):
-        timestamp = frame.get("timestamp", 0)
+    for frame_index, frame in tqdm(enumerate(data), ascii="░▒█", desc="Processing JSON files", unit="frame"):
+        timestamp = frame.get("timestamp", frame_index)  # Use frame index if timestamp not available
 
         # Filter out 2D lidars
         lidars = [o for o in frame.get("captures", []) if o.get('@type') == 'type.custom/solo.2DLidar']
 
+        # Track which robots we've processed in this frame
+        processed_robots = set()
+
         for lidar in lidars:
             amr_id = "_".join(lidar["id"].split("_")[:2])  # e.g., "AMR_1"
+            
+            # Skip if we've already processed this robot in the current frame
+            if amr_id in processed_robots:
+                continue
+            
+            processed_robots.add(amr_id)
 
-            # Initialize per-lidar/AMR fields
-            robot_position = [0, 0]  # Default position
-            robot_orientation = [1, 0]  # Default orientation (facing right)
+            # Get robot position and orientation
+            robot_position_raw = lidar.get("robotPosition", [0, 0, 0])
+            robot_yaw_raw = lidar.get("robotRotationEuler", [0, 0, 0])  # In radians
+            
+            # Take X and Z only (floor plan view in Unity)
+            robot_position = [robot_position_raw[0], robot_position_raw[2]]
+            
+            # In Unity, y-axis rotation gives the yaw in the x-z plane
+            # The rotation around y-axis corresponds to the angle in the x-z plane
+            robot_orientation = [np.cos(robot_yaw_raw), np.sin(robot_yaw_raw)]
 
-            # Extract front lidar pose (robot pose)
-            if 'front' in lidar['id']:
-                robot_position_raw = lidar.get("robotPosition", [])
-                robot_yaw_raw = lidar.get("robotRotationEuler", [])
-
-                if len(robot_position_raw) == 3:
-                    # Take X and Z only (floor plan view)
-                    robot_position = [robot_position_raw[0], robot_position_raw[2]]
-
-                # FIX: Changed to handle robot_yaw_raw correctly if it's a float or a list of floats
-                if isinstance(robot_yaw_raw, list) and len(robot_yaw_raw) > 0:
-                    # It's a list with at least one element
-                    yaw_rad = np.radians(robot_yaw_raw[0])  # Convert to radians
-                    robot_orientation = [np.cos(yaw_rad), np.sin(yaw_rad)]
-                elif isinstance(robot_yaw_raw, (int, float)):
-                    # It's a single number
-                    yaw_rad = np.radians(robot_yaw_raw)  # Convert to radians
-                    robot_orientation = [np.cos(yaw_rad), np.sin(yaw_rad)]
-
-            # Global lidar pose (for transforming points)
-            lidar_position = np.array(lidar.get("globalPosition", [0, 0, 0]))
-            lidar_quaternion = np.array(lidar.get("globalRotation", [0, 0, 0, 1]))
-
-            # Process annotations (actual lidar scan data)
-            pointcloud = []
-            for annot in lidar.get("annotations", []):
-                ranges = np.array(annot.get("ranges", []))
-                angles = np.array(annot.get("angles", []))
-                classes = np.array(annot.get("object_classes", []))
-
-                # Transform points to global frame
-                if len(ranges) > 0 and len(angles) > 0:
-                    pointcloud_x, pointcloud_y = transform_lidar_points(
-                        ranges, angles, lidar_position, lidar_quaternion
-                    )
-                    
-                    for i in range(len(pointcloud_x)):
-                        # FIX: Handle 'no_class' string in class values
-                        class_value = 0  # Default class
-                        if i < len(classes):
-                            try:
-                                # Try to convert to int, but handle string value
-                                if isinstance(classes[i], (int, float)):
-                                    class_value = int(classes[i])
-                                elif isinstance(classes[i], str) and classes[i].lower() != 'no_class':
-                                    # Try to convert string to int if it's not 'no_class'
-                                    class_value = int(classes[i])
-                                # For 'no_class' or any other non-numeric string, keep default 0
-                            except (ValueError, TypeError):
-                                # Keep default class value if conversion fails
-                                pass
-                        
-                        pointcloud.append({
-                            "x": pointcloud_x[i],
-                            "y": pointcloud_y[i],
-                            "class": class_value
-                        })
-
-            # Append data to the structure
+            # Add robot data for this frame
             robot_data[amr_id]["timestamps"].append(timestamp)
             robot_data[amr_id]["robot_positions"].append(robot_position)
             robot_data[amr_id]["robot_orientations"].append(robot_orientation)
-            robot_data[amr_id]["pointclouds"].append(pointcloud)
-
+            
+            # Process all pointclouds for this robot
+            all_points = []
+            
+            # Loop through all lidars for this robot to collect point cloud data
+            robot_lidars = [l for l in lidars if "_".join(l["id"].split("_")[:2]) == amr_id]
+            
+            for robot_lidar in robot_lidars:
+                # Global lidar pose
+                lidar_position = np.array(robot_lidar.get("globalPosition", [0, 0, 0]))
+                lidar_quaternion = np.array(robot_lidar.get("globalRotation", [0, 0, 0, 1]))
+                
+                # Process annotations (lidar scan data)
+                for annot in robot_lidar.get("annotations", []):
+                    ranges = np.array(annot.get("ranges", []))
+                    angles = np.array(annot.get("angles", []))
+                    classes = annot.get("object_classes", ["unknown"] * len(ranges))
+                    
+                    # Skip if no data
+                    if len(ranges) == 0 or len(angles) == 0:
+                        continue
+                    
+                    # Transform points to global frame (Unity coordinates)
+                    pointcloud_x, pointcloud_z = transform_lidar_points(
+                        ranges, angles, lidar_position, lidar_quaternion
+                    )
+                    
+                    # Add transformed points to the collection
+                    for x, z, c in zip(pointcloud_x, pointcloud_z, classes):
+                        all_points.append({"x": float(x), "z": float(z), "class": c})
+            
+            # Add pointcloud data for this robot in this frame
+            robot_data[amr_id]["pointclouds"].append(all_points)
+    
+    # Save data as JSON
+    os.makedirs(savepath, exist_ok=True)
+    filepath = os.path.join(savepath, filename)
+    
+    # Convert to regular dict for JSON serialization
+    robot_data_dict = {k: dict(v) for k, v in robot_data.items()}
+    
+    with open(filepath, 'w') as f:
+        json.dump(robot_data_dict, f, indent=2)
+    
+    print(f"\n✅ Robot and LiDAR data saved to {filepath}")
+    
     return robot_data
 
 
