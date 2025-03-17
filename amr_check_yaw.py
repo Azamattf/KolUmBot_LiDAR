@@ -28,7 +28,7 @@ def main():
     frame_step = 1
 
     json_files = load_json_files(path_to_images, frame_step)
-    position_data = read_positions(json_files, save_path)
+    read_positions(json_files, save_path)
 
 
 # In[3]: Load JSON files

@@ -22,7 +22,7 @@ def quaternion2euler (x, y, z, w):
     def NormalizeAngle (angle):
         while (angle>2*np.pi):
             angle -= 2*np.pi
-        while (angle<0):
+        while (angle<-0.001):
             angle += 2*np.pi
         return angle
     

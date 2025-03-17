@@ -16,7 +16,7 @@ def main():
     path_to_sem_def = os.path.join(path_to_dataset, "class_definition_semantic_segmentation.json")
       
     # Processing parameters
-    frame_step = 10
+    frame_step = 1
 
     # Load and process data
     json_files = load_json_files(path_to_images, frame_step)
@@ -62,32 +62,39 @@ class Visualizer:
         self.robot_paths = {}   # Store robot path traces
         self.pointcloud_traces = {}  # Store pointcloud traces
         
-        # Get common timestamps across all robots (assuming all robots have the same timestamps)
+        # Get common timestamps across all robots
         self.time_stamps = sorted(list(robot_data.values())[0]["timestamps"])
         
-    def create_robot_shape(self, x, y, orientation, robot_id, size=0.5):
-        """Create a trapezoid shape for the robot with the narrow end as the front."""
-        # Calculate trapezoid corners based on orientation
+    def create_robot_shape(self, x, y, orientation, robot_id, size=2):
+        
+        # Calculate angle from orientation vector
         angle = np.arctan2(orientation[1], orientation[0])
         
-        # Define trapezoid points (narrower at the front)
+        # Define trapezoid in local coordinates (centered at origin)
         front_width = size * 0.6
         back_width = size * 1.2
         length = size * 2
         
-        # Calculate corner points (Unity coordinate system)
-        front_left = [x + length/2 * np.cos(angle) - front_width/2 * np.sin(angle),
-                     y + length/2 * np.sin(angle) + front_width/2 * np.cos(angle)]
-        front_right = [x + length/2 * np.cos(angle) + front_width/2 * np.sin(angle),
-                      y + length/2 * np.sin(angle) - front_width/2 * np.cos(angle)]
-        back_left = [x - length/2 * np.cos(angle) - back_width/2 * np.sin(angle),
-                    y - length/2 * np.sin(angle) + back_width/2 * np.cos(angle)]
-        back_right = [x - length/2 * np.cos(angle) + back_width/2 * np.sin(angle),
-                     y - length/2 * np.sin(angle) - back_width/2 * np.cos(angle)]
+        local_points = np.array([
+            [length/2, -front_width/2],  # front left
+            [length/2, front_width/2],   # front right
+            [-length/2, back_width/2],   # back right
+            [-length/2, -back_width/2],  # back left
+            [length/2, -front_width/2]   # close the shape
+        ])
         
-        # Complete the shape by returning to the first point
-        points_x = [front_left[0], front_right[0], back_right[0], back_left[0], front_left[0]]
-        points_y = [front_left[1], front_right[1], back_right[1], back_left[1], front_left[1]]
+        # Create rotation matrix
+        rotation = np.array([
+            [np.sin(angle), -np.cos(angle)],
+            [np.cos(angle), np.sin(angle)]
+        ])
+        
+        # Apply rotation and translation to all points
+        transformed_points = np.dot(local_points, rotation.T) + np.array([x, y])
+        
+        # Split into x and y coordinates
+        points_x = transformed_points[:, 0]
+        points_y = transformed_points[:, 1]
         
         return points_x, points_y
 
@@ -99,6 +106,23 @@ class Visualizer:
             color = self.class_color_map.get(label, 'rgba(150, 150, 150, 0.7)')
             class_colors.append(color)
         return class_colors
+    
+    def add_pointcloud_legend(self):
+        """Add a legend showing the color mapping for semantic classes."""
+        # Use the existing class_color_map directly
+        for class_name, color in self.class_color_map.items():
+            # Add an invisible scatter point with the class name and color
+            self.fig.add_trace(go.Scatter(
+                x=[None], 
+                y=[None],
+                mode='markers',
+                marker=dict(
+                    size=10,
+                    color=color
+                ),
+                name=f"{class_name}",
+                showlegend=True
+            ))
 
     def animate(self):
         """Create animation with robot movements and LiDAR pointclouds."""
@@ -116,24 +140,22 @@ class Visualizer:
                 all_x.extend([p["x"] for p in pointcloud])
                 all_z.extend([p["z"] for p in pointcloud])
         
-        # Calculate fixed bounds with 10% padding
-        x_min, x_max = min(all_x), max(all_x)
-        z_min, z_max = min(all_z), max(all_z)
+        # 1. Calculate fixed BOUNDS
+
+        useful_axis_part = 0.4
+        x_min, x_max = min(all_x)*useful_axis_part, max(all_x)*useful_axis_part
+        z_min, z_max = min(all_z)*useful_axis_part, max(all_z)*useful_axis_part
+
+        x_axis_range = [x_min, x_max]
+        z_axis_range = [z_min, z_max]
         
-        x_range = x_max - x_min
-        z_range = z_max - z_min
-        x_padding = x_range * 0.1
-        z_padding = z_range * 0.1
-        
-        # Fixed axis ranges with padding
-        x_axis_range = [x_min - x_padding, x_max + x_padding]
-        z_axis_range = [z_min - z_padding, z_max + z_padding]
-        
-        # The proper ordering to ensure robots appear on top is to add traces in this order:
+        # The proper ordering to ensure robots appear on top:
         # 1. First all pointcloud traces
         # 2. Then all path traces
         # 3. Finally all robot shape traces
         
+        # 2. INITIALIZE
+
         # Initialize pointcloud traces first
         for robot_id, data in self.robot_data.items():
             # Initial pointcloud data
@@ -168,7 +190,7 @@ class Visualizer:
                 x=[initial_pos[0]],
                 y=[initial_pos[1]],
                 mode="lines",
-                line=dict(color=robot_color, width=2, dash='dash'),
+                line=dict(color=robot_color, width=2),
                 name=f"{robot_id} (Path)",
                 showlegend=False
             )
@@ -187,22 +209,23 @@ class Visualizer:
                 initial_pos[0], initial_pos[1], initial_orient, robot_id
             )
             
-            # Add robot shape trace - ensure the fillcolor matches the robot_color
+            # Add robot shape trace
             self.robot_shapes[robot_id] = go.Scatter(
                 x=shape_x,
                 y=shape_y,
+                mode="lines",
                 fill="toself",
                 fillcolor=robot_color,  # Ensure matching color with path
-                line=dict(color='black', width=1),
-                name=f"{robot_id} (Robot)",
+                line=dict(color=robot_color, width=1),
+                name=f"{robot_id}",
                 text=robot_id,
                 hoverinfo="text"
             )
             self.fig.add_trace(self.robot_shapes[robot_id])
         
-        # Create frames for animation
+        # 3. Create FRAMES for animation
         frames = []
-        for frame_idx, timestamp in enumerate(self.time_stamps):
+        for frame_idx, timestamp in tqdm(enumerate(self.time_stamps), total=len(self.time_stamps), ascii="░▒█", desc="Processing frames", unit=" frames"):
             frame_data = []
             
             # Follow the same ordering in each frame: pointclouds first, then paths, then robots
@@ -230,7 +253,7 @@ class Visualizer:
                     )
                 )
             
-            # Then add all path traces
+            # Add all path traces
             for robot_id, data in self.robot_data.items():
                 robot_color = self.robot_colors[robot_id]
                 
@@ -243,7 +266,7 @@ class Visualizer:
                         x=path_x,
                         y=path_y,
                         mode="lines",
-                        line=dict(color=robot_color, width=2, dash='dash'),
+                        line=dict(color=robot_color, width=2),
                         name=f"{robot_id} (Path)",
                         showlegend=False
                     )
@@ -266,10 +289,11 @@ class Visualizer:
                     go.Scatter(
                         x=shape_x,
                         y=shape_y,
+                        mode="lines",
                         fill="toself",
                         fillcolor=robot_color,  # Use same color as the path
-                        line=dict(color='black', width=1),
-                        name=f"{robot_id} (Robot)",
+                        line=dict(color=robot_color, width=1),
+                        name=f"{robot_id}",
                         text=f"{robot_id} @ {timestamp}",
                         hoverinfo="text"
                     )
@@ -278,7 +302,7 @@ class Visualizer:
             # Create frame with all data - ENSURE FIXED AXES in every frame
             frame = go.Frame(
                 data=frame_data,
-                name=str(timestamp),
+                name=str(f"{timestamp:.2f}"),
                 layout=go.Layout(
                     xaxis=dict(range=x_axis_range, fixedrange=True),  # Add fixedrange=True
                     yaxis=dict(range=z_axis_range, fixedrange=True)   # Add fixedrange=True
@@ -286,22 +310,20 @@ class Visualizer:
             )
             frames.append(frame)
         
-        # Add frames to figure
+        # 4. Add frames to figure
         self.fig.frames = frames
+
+        self.add_pointcloud_legend()
         
-        # Add animation controls
+        # 5. Add animation controls
         self.fig.update_layout(
             updatemenus=[{
                 'type': 'buttons',
                 'buttons': [
                     {
-                        'args': [None, {'frame': {'duration': 300, 'redraw': True}, 'fromcurrent': True}],
-                        'label': 'Play',
-                        'method': 'animate'
-                    },
-                    {
-                        'args': [[None], {'frame': {'duration': 0, 'redraw': True}, 'mode': 'immediate'}],
-                        'label': 'Pause',
+                        'args': [None, {'frame': {'duration': 50, 'redraw': True}, 'fromcurrent': True, 'mode': 'immediate', 'transition': {'duration': 0}}],
+                        'args2': [[None], {'frame': {'duration': 0, 'redraw': False}, 'mode': 'immediate', 'transition': {'duration': 0}}],
+                        'label': 'Play/Pause',
                         'method': 'animate'
                     }
                 ],
@@ -314,10 +336,11 @@ class Visualizer:
                 'y': 0,
                 'yanchor': 'top'
             }],
+
             sliders=[{
                 'active': 0,
                 'steps': [{
-                    'args': [[f.name], {'frame': {'duration': 300, 'redraw': True}, 'mode': 'immediate'}],
+                    'args': [[f.name], {'frame': {'duration': 50, 'redraw': True}, 'mode': 'immediate'}],
                     'label': f.name,
                     'method': 'animate'
                 } for f in frames],
@@ -328,22 +351,22 @@ class Visualizer:
             }]
         )
         
-        # Set up layout for Unity coordinates with fixed axis ranges
+        # 6. Set up plot for Unity coordinates with fixed axis ranges
         self.fig.update_layout(
             title="AMR Movement with LiDAR Data (Unity Coordinates)",
             xaxis=dict(
                 title="X Position (Unity)",
-                range=x_axis_range,  # Fixed range with padding
+                range=x_axis_range,  # Fixed range 
                 scaleanchor="y",
                 scaleratio=1,
-                fixedrange=True,     # Add fixedrange=True to prevent zoom
-                constrain="domain"   # Add constraint to maintain aspect ratio
+                fixedrange=True,     # prevent zoom
+                constrain="domain"   # maintain aspect ratio
             ),
             yaxis=dict(
-                title="Z Position (Unity)",  # Z is up in Unity's coordinate system
-                range=z_axis_range,  # Fixed range with padding
-                fixedrange=True,     # Add fixedrange=True to prevent zoom
-                constrain="domain"   # Add constraint to maintain aspect ratio
+                title="Z Position (Unity)",  # Z is up in Unity
+                range=z_axis_range,  
+                fixedrange=True,     
+                constrain="domain"  
             ),
             legend=dict(
                 x=1.05,
@@ -376,8 +399,8 @@ def transform_lidar_points(
     """Transform lidar points from local to global Unity coordinate system."""
     # 1. Convert polar to local Cartesian coordinates (in Unity coordinates)
     theta_rad = np.deg2rad(angles)
-    x_local = ranges * np.cos(theta_rad)
-    z_local = ranges * np.sin(theta_rad)
+    x_local = ranges * np.sin(theta_rad)
+    z_local = ranges * np.cos(theta_rad)
     
     # Stack coordinates and add y=0 for 3D rotation (Unity uses XYZ where Y is up)
     points_local = np.vstack((x_local, np.zeros_like(x_local), z_local)).T
