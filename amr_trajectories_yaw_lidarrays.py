@@ -16,11 +16,13 @@ def main():
     path_to_sem_def = os.path.join(path_to_dataset, "class_definition_semantic_segmentation.json")
       
     # Processing parameters
+    sample_size = 1900
     frame_step = 1
 
     # Load and process data
-    json_files = load_json_files(path_to_images, frame_step)
-    robot_data = read_data(json_files, save_path)
+    json_files = load_json_files(path_to_images, sample_size, frame_step)
+    #robot_data = read_data(json_files, save_path)
+    robot_data = read_data_with_offset(json_files, save_path)
     class_def = load_class_definitions(path_to_sem_def)
 
     # Create visualization
@@ -418,10 +420,10 @@ def transform_lidar_points(
     return x_global, z_global
 
 
-def load_json_files(path_to_jsons, frame_step):
+def load_json_files(path_to_jsons, sample_size, frame_step):
     """Load JSON files from the specified directory with given frame step."""
     data = []
-    json_files = [f for f in natsorted(os.listdir(path_to_jsons)) if f.endswith(".json")]
+    json_files = [f for f in natsorted(os.listdir(path_to_jsons)) if f.endswith(".json")][1000:sample_size]
     sampled_files = json_files[::frame_step]
     
     print("\nFirst 5 sampled files:")
@@ -454,7 +456,7 @@ def read_data(data, savepath, filename="robot_lidar_data.json"):
         "pointclouds": []
     })
 
-    for frame_index, frame in tqdm(enumerate(data), ascii="░▒█", desc="Processing JSON files", unit="frame"):
+    for frame_index, frame in tqdm(list(enumerate(data)), ascii="░▒█", desc="Processing JSON files", unit="frame"):
         timestamp = frame.get("timestamp", frame_index)  # Use frame index if timestamp not available
 
         # Filter out 2D lidars
@@ -535,6 +537,156 @@ def read_data(data, savepath, filename="robot_lidar_data.json"):
     
     return robot_data
 
+
+def read_data_with_offset(data, savepath, offset=0.1*(1/3), filename="robot_lidar_data_transform_offset.json"):
+    """Extract robot positions, orientations, and pointcloud data from JSON files,
+    applying a temporal offset between lidar pose and pointcloud data.
+    
+    The offset is applied by using the current pointcloud data but transforming it with 
+    the lidar pose from a different timestamp, correctly preserving fixed world objects.
+    
+    Args:
+        data: The original data to process
+        savepath: Directory to save the processed data
+        offset: Temporal offset in seconds (default: 0.5)
+        filename: Output filename (default: "robot_lidar_data_transform_offset.json")
+    
+    Returns:
+        Dictionary containing the processed robot data with temporal offset correction
+    """
+    robot_data = defaultdict(lambda: {
+        "timestamps": [],
+        "robot_positions": [],
+        "robot_orientations": [],
+        "pointclouds": []
+    })
+
+    # First pass: Collect all frames with their timestamps
+    all_frames = []
+    for frame_index, frame in tqdm(list(enumerate(data)), ascii="░▒█", desc="Collecting frame data", unit="frame"):
+        timestamp = frame.get("timestamp", frame_index)
+        all_frames.append({
+            "frame": frame,
+            "timestamp": timestamp,
+            "index": frame_index
+        })
+    
+    # Sort frames by timestamp to ensure proper ordering
+    all_frames.sort(key=lambda x: x["timestamp"])
+    
+    # Process each frame with the correct temporal offset
+    for frame_data in tqdm(all_frames, ascii="░▒█", desc="Processing frames with offset", unit="frame"):
+        frame = frame_data["frame"]
+        current_timestamp = frame_data["timestamp"]
+        
+        # Filter out 2D lidars in current frame
+        lidars = [o for o in frame.get("captures", []) if o.get('@type') == 'type.custom/solo.2DLidar']
+
+        # Track which robots we've processed in this frame
+        processed_robots = set()
+
+        for lidar in lidars:
+            amr_id = "_".join(lidar["id"].split("_")[:2])  # e.g., "AMR_1"
+            
+            # Skip if we've already processed this robot in the current frame
+            if amr_id in processed_robots:
+                continue
+            
+            processed_robots.add(amr_id)
+            
+            # Get current robot position and orientation (this will be recorded as-is)
+            robot_position_raw = lidar.get("robotPosition", [0, 0, 0])
+            robot_yaw_raw = lidar.get("robotRotationEuler", 0)  # In radians
+            
+            # Take X and Z only (floor plan view in Unity)
+            robot_position = [robot_position_raw[0], robot_position_raw[2]]
+            
+            # In Unity, y-axis rotation gives the yaw in the x-z plane
+            robot_orientation = [np.cos(robot_yaw_raw), np.sin(robot_yaw_raw)]
+
+            # Find frame that corresponds to the offset timestamp
+            offset_timestamp = current_timestamp - offset
+            
+            # Find the frame with the closest timestamp
+            closest_frame = min(all_frames, key=lambda x: abs(x["timestamp"] - offset_timestamp), default=None)
+            
+            if closest_frame is None:
+                # If no offset frame found, skip this robot for this frame
+                continue
+                
+            offset_frame = closest_frame["frame"]
+            
+            # Find this robot's lidar in the offset frame
+            offset_lidars = [o for o in offset_frame.get("captures", []) 
+                            if o.get('@type') == 'type.custom/solo.2DLidar' 
+                            and "_".join(o["id"].split("_")[:2]) == amr_id]
+            
+            if not offset_lidars:
+                # If robot not found in offset frame, skip this robot for this frame
+                continue
+                
+            # Add current frame data to result
+            robot_data[amr_id]["timestamps"].append(current_timestamp)
+            robot_data[amr_id]["robot_positions"].append(robot_position)
+            robot_data[amr_id]["robot_orientations"].append(robot_orientation)
+            
+            # Process all pointclouds for this robot using CURRENT frame but OFFSET lidar poses
+            all_points = []
+            
+            # Loop through all lidars for this robot in CURRENT frame
+            robot_lidars = [l for l in lidars if "_".join(l["id"].split("_")[:2]) == amr_id]
+            
+            # Match current lidars with offset lidars by ID
+            for robot_lidar in robot_lidars:
+                lidar_id = robot_lidar["id"]
+                
+                # Find the matching lidar in the offset frame
+                matching_offset_lidars = [l for l in offset_lidars if l["id"] == lidar_id]
+                
+                if not matching_offset_lidars:
+                    continue
+                    
+                offset_lidar = matching_offset_lidars[0]
+                
+                # Get the global lidar pose from the OFFSET frame
+                offset_lidar_position = np.array(offset_lidar.get("globalPosition", [0, 0, 0]))
+                offset_lidar_rotation = np.array(offset_lidar.get("globalRotation", [0, 0, 0, 1]))
+                
+                # Process annotations (lidar scan data) from CURRENT frame
+                for annot in robot_lidar.get("annotations", []):
+                    ranges = np.array(annot.get("ranges", []))
+                    angles = np.array(annot.get("angles", []))
+                    classes = annot.get("object_classes", ["unknown"] * len(ranges))
+                    
+                    # Skip if no data
+                    if len(ranges) == 0 or len(angles) == 0:
+                        continue
+                    
+                    # Transform current points using offset lidar pose
+                    pointcloud_x, pointcloud_z = transform_lidar_points(
+                        ranges, angles, offset_lidar_position, offset_lidar_rotation
+                    )
+                    
+                    # Add transformed points to the collection
+                    for x, z, c in zip(pointcloud_x, pointcloud_z, classes):
+                        all_points.append({"x": float(x), "z": float(z), "class": c})
+            
+            # Add pointcloud data for this robot in this frame
+            robot_data[amr_id]["pointclouds"].append(all_points)
+    
+    # Save data as JSON
+    os.makedirs(savepath, exist_ok=True)
+    filepath = os.path.join(savepath, filename)
+    
+    # Convert to regular dict for JSON serialization
+    robot_data_dict = {k: dict(v) for k, v in robot_data.items()}
+    
+    with open(filepath, 'w') as f:
+        json.dump(robot_data_dict, f, indent=2)
+    
+    print(f"\n✅ Robot and LiDAR data with {offset}s transform offset saved to {filepath}")
+    
+    return robot_data
 
 if __name__ == "__main__":
     main()
