@@ -16,8 +16,10 @@ def main():
     path_to_sem_def = os.path.join(path_to_dataset, "class_definition_semantic_segmentation.json")
       
     # Processing parameters
-    sample_size = 1900
-    frame_step = 1
+    sample_size = 1800
+    frame_step = 10
+    time_step = 0.033333333*frame_step
+    playback_rate = 1
 
     # Load and process data
     json_files = load_json_files(path_to_images, sample_size, frame_step)
@@ -26,7 +28,7 @@ def main():
     class_def = load_class_definitions(path_to_sem_def)
 
     # Create visualization
-    visualizer = Visualizer(robot_data, class_def)
+    visualizer = Visualizer(robot_data, class_def, frame_step, time_step)
     visualizer.animate()
     visualizer.save_animation(save_path)
 
@@ -49,9 +51,11 @@ def load_class_definitions(filepath):
 
 
 class Visualizer:
-    def __init__(self, robot_data, class_color_map):
+    def __init__(self, robot_data, class_color_map, frame_step, time_step):
         self.robot_data = robot_data
         self.class_color_map = class_color_map
+        self.frame_step = frame_step
+        self.time_step = time_step
         self.fig = go.Figure()
         
         # Define unique colors for each robot
@@ -318,13 +322,17 @@ class Visualizer:
         self.add_pointcloud_legend()
         
         # 5. Add animation controls
+        set_frame_dur = self.time_step * 1000
+            
+
         self.fig.update_layout(
+            title=f"AMR Movement with LiDAR Data (Unity Coordinates, Frame rate = {1000/self.frame_step:.1f} FPS)",
+            # Buttons for play/pause
             updatemenus=[{
                 'type': 'buttons',
                 'buttons': [
                     {
-                        'args': [None, {'frame': {'duration': 50, 'redraw': True}, 'fromcurrent': True, 'mode': 'immediate', 'transition': {'duration': 0}}],
-                        'args2': [[None], {'frame': {'duration': 0, 'redraw': False}, 'mode': 'immediate', 'transition': {'duration': 0}}],
+                        'args': [None, {'frame': {'duration': set_frame_dur, 'redraw': True}, 'fromcurrent': True, 'mode': 'immediate', 'transition': {'duration': 0}}],
                         'label': 'Play/Pause',
                         'method': 'animate'
                     }
@@ -338,11 +346,12 @@ class Visualizer:
                 'y': 0,
                 'yanchor': 'top'
             }],
-
+            
+            # Timeline slider to move through the frames
             sliders=[{
                 'active': 0,
                 'steps': [{
-                    'args': [[f.name], {'frame': {'duration': 50, 'redraw': True}, 'mode': 'immediate'}],
+                    'args': [[f.name], {'frame': {'duration': self.frame_step, 'redraw': True}, 'mode': 'immediate'}],
                     'label': f.name,
                     'method': 'animate'
                 } for f in frames],
@@ -350,12 +359,35 @@ class Visualizer:
                 'xanchor': 'left',
                 'y': 0,
                 'yanchor': 'top'
+            },
+            # Playback speed control slider
+            {
+                'active': 0,
+                'pad': {'b': 10},
+                'currentvalue': {
+                    'font': {'size': 20},
+                    'prefix': 'Speed: ',
+                    'visible': True,
+                    'xanchor': 'center'
+                },
+                'steps': [
+                    {
+                        'args': [None, {'frame': {'duration': value, 'redraw': True}, 'mode': 'immediate'}],
+                        'label': f'{int((1000*self.time_step)/value)}x',
+                        'method': 'animate'
+                    } for value in np.array([1000, 500, 333.33, 250, 200, 125, 100])  # Adjust slider step values
+                ],
+                'x': 0.85,  # Position the speed slider on the right side
+                'xanchor': 'left',  # Anchor the slider's left side to the x position
+                'y': 0.1,  # Position the speed slider vertically (adjust this value for positioning)
+                'yanchor': 'bottom',  # Anchor the slider's bottom side to the y position
             }]
         )
+
         
         # 6. Set up plot for Unity coordinates with fixed axis ranges
         self.fig.update_layout(
-            title="AMR Movement with LiDAR Data (Unity Coordinates)",
+            title=f"AMR Movement with LiDAR Data (Unity Coordinates, Frame step = {self.frame_step})",
             xaxis=dict(
                 title="X Position (Unity)",
                 range=x_axis_range,  # Fixed range 
@@ -423,7 +455,7 @@ def transform_lidar_points(
 def load_json_files(path_to_jsons, sample_size, frame_step):
     """Load JSON files from the specified directory with given frame step."""
     data = []
-    json_files = [f for f in natsorted(os.listdir(path_to_jsons)) if f.endswith(".json")][1000:sample_size]
+    json_files = [f for f in natsorted(os.listdir(path_to_jsons)) if f.endswith(".json")][:sample_size]
     sampled_files = json_files[::frame_step]
     
     print("\nFirst 5 sampled files:")
