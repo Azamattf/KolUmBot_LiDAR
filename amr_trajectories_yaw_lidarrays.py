@@ -1,11 +1,6 @@
 import os
 import json
 import numpy as np
-import dash
-from dash import dcc, html
-from dash.dependencies import Input, Output, State
-from dash_recorder import Recorder
-import plotly.graph_objects as go
 from natsort import natsorted
 from collections import defaultdict
 from tqdm import tqdm
@@ -23,17 +18,14 @@ def main():
     sample_size = 1000
     frame_step = 10
     time_step = 0.033333335*frame_step
-    playback_rate = 1
-
+    
     # Load and process data
     json_files = load_json_files(path_to_images, sample_size, frame_step)
-    #robot_data = read_data(json_files, save_path)
     robot_data = read_data_with_offset(json_files, save_path)
     class_def = load_class_definitions(path_to_sem_def)
-
-    # Create visualization
-    visualizer = DashVisualizer(robot_data, class_def, frame_step, time_step)
-    visualizer.run_server()
+    
+    # Create and save HTML
+    create_html_visualization(robot_data, class_def, frame_step, time_step, save_path)
 
 
 def load_class_definitions(filepath):
@@ -52,337 +44,6 @@ def load_class_definitions(filepath):
     
     return color_map
 
-
-class DashVisualizer:
-    def __init__(self, robot_data, class_color_map, frame_step, time_step):
-        self.robot_data = robot_data
-        self.class_color_map = class_color_map
-        self.frame_step = frame_step
-        self.time_step = time_step
-        
-        # Define unique colors for each robot
-        self.robot_colors = {
-            robot_id: f'rgb({hash(robot_id) % 200},{(hash(robot_id) * 13) % 200},{(hash(robot_id) * 29) % 200})'
-            for robot_id in robot_data.keys()
-        }
-        
-        # Get common timestamps across all robots
-        self.time_stamps = sorted(list(robot_data.values())[0]["timestamps"])
-        
-        # Prepare speed values for the slider
-        self.speed_values = np.array([1000, 500, 333.33, 250, 200, 125, 100])
-        
-        # Calculate bounds for all frames
-        self.calculate_bounds()
-        
-        # Create app
-        self.app = dash.Dash(__name__)
-        self.setup_layout()
-        self.setup_callbacks()
-        
-    def calculate_bounds(self):
-        """Calculate bounds for all frames across all robots."""
-        all_x = []
-        all_z = []
-        
-        for robot_id, data in self.robot_data.items():
-            # Get all robot positions across all frames
-            all_x.extend([pos[0] for pos in data["robot_positions"]])
-            all_z.extend([pos[1] for pos in data["robot_positions"]])
-            
-            # Include pointcloud data from all frames
-            for pointcloud in data["pointclouds"]:
-                all_x.extend([p["x"] for p in pointcloud])
-                all_z.extend([p["z"] for p in pointcloud])
-        
-        # Calculate the view bounds
-        useful_axis_part = 0.4
-        self.x_min, self.x_max = min(all_x)*useful_axis_part, max(all_x)*useful_axis_part
-        self.z_min, self.z_max = min(all_z)*useful_axis_part, max(all_z)*useful_axis_part
-        
-        self.x_axis_range = [self.x_min, self.x_max]
-        self.z_axis_range = [self.z_min, self.z_max]
-
-    def create_robot_shape(self, x, y, orientation, robot_id, size=2):
-        """Create a robot shape (trapezoid) at the given position and orientation."""
-        # Calculate angle from orientation vector
-        angle = np.arctan2(orientation[1], orientation[0])
-        
-        # Define trapezoid in local coordinates (centered at origin)
-        front_width = size * 0.6
-        back_width = size * 1.2
-        length = size * 2
-        
-        local_points = np.array([
-            [length/2, -front_width/2],  # front left
-            [length/2, front_width/2],   # front right
-            [-length/2, back_width/2],   # back right
-            [-length/2, -back_width/2],  # back left
-            [length/2, -front_width/2]   # close the shape
-        ])
-        
-        # Create rotation matrix
-        rotation = np.array([
-            [np.sin(angle), -np.cos(angle)],
-            [np.cos(angle), np.sin(angle)]
-        ])
-        
-        # Apply rotation and translation to all points
-        transformed_points = np.dot(local_points, rotation.T) + np.array([x, y])
-        
-        # Split into x and y coordinates
-        points_x = transformed_points[:, 0]
-        points_y = transformed_points[:, 1]
-        
-        return points_x, points_y
-
-    def map_classes_to_colors(self, class_labels):
-        """Map pointcloud classes to colors using the semantic segmentation definitions."""
-        class_colors = []
-        for label in class_labels:
-            # Use the color map, default to gray if class not found
-            color = self.class_color_map.get(label, 'rgba(150, 150, 150, 0.7)')
-            class_colors.append(color)
-        return class_colors
-    
-    def create_figure(self, frame_idx, frame_duration):
-        """Create a figure for the specified frame with the given frame duration."""
-        fig = go.Figure()
-        
-        timestamp = self.time_stamps[frame_idx]
-        
-        # Add pointcloud traces
-        for robot_id, data in self.robot_data.items():
-            # Pointcloud data for this frame
-            pointclouds = data["pointclouds"][frame_idx]
-            pointcloud_x = [p["x"] for p in pointclouds]
-            pointcloud_z = [p["z"] for p in pointclouds]
-            pointcloud_classes = [p.get("class", "unknown") for p in pointclouds]
-            colors = self.map_classes_to_colors(pointcloud_classes)
-            
-            fig.add_trace(go.Scatter(
-                x=pointcloud_x,
-                y=pointcloud_z,
-                mode="markers",
-                marker=dict(
-                    color=colors,
-                    size=4,
-                    opacity=0.7
-                ),
-                name=f"{robot_id} (LiDAR)",
-                showlegend=False
-            ))
-        
-        # Add robot path traces
-        for robot_id, data in self.robot_data.items():
-            robot_color = self.robot_colors[robot_id]
-            
-            # Collect all positions up to current frame for path
-            path_x = [pos[0] for pos in data["robot_positions"][:frame_idx+1]]
-            path_y = [pos[1] for pos in data["robot_positions"][:frame_idx+1]]
-            
-            fig.add_trace(go.Scatter(
-                x=path_x,
-                y=path_y,
-                mode="lines",
-                line=dict(color=robot_color, width=2),
-                name=f"{robot_id} (Path)",
-                showlegend=False
-            ))
-        
-        # Add robot shape traces
-        for robot_id, data in self.robot_data.items():
-            robot_color = self.robot_colors[robot_id]
-            
-            # Robot position and orientation for this frame
-            robot_pos = data["robot_positions"][frame_idx]
-            robot_orient = data["robot_orientations"][frame_idx]
-            
-            # Create robot shape
-            shape_x, shape_y = self.create_robot_shape(
-                robot_pos[0], robot_pos[1], robot_orient, robot_id
-            )
-            
-            fig.add_trace(go.Scatter(
-                x=shape_x,
-                y=shape_y,
-                mode="lines",
-                fill="toself",
-                fillcolor=robot_color,
-                line=dict(color=robot_color, width=1),
-                name=f"{robot_id}",
-                text=f"{robot_id} @ {timestamp}",
-                hoverinfo="text"
-            ))
-        
-        # Add legend for semantic classes
-        for class_name, color in self.class_color_map.items():
-            fig.add_trace(go.Scatter(
-                x=[None], 
-                y=[None],
-                mode='markers',
-                marker=dict(
-                    size=10,
-                    color=color
-                ),
-                name=f"{class_name}",
-                showlegend=True
-            ))
-        
-        # Set up layout with fixed axis ranges
-        fig.update_layout(
-            title=f"AMR Movement with LiDAR Data (Unity Coordinates, Frame rate = {1000/frame_duration:.1f} FPS)",
-            xaxis=dict(
-                title="X Position (Unity)",
-                range=self.x_axis_range,
-                scaleanchor="y",
-                scaleratio=1,
-                fixedrange=True,
-                constrain="domain"
-            ),
-            yaxis=dict(
-                title="Z Position (Unity)",
-                range=self.z_axis_range,
-                fixedrange=True,
-                constrain="domain"
-            ),
-            legend=dict(
-                x=1.05,
-                y=1,
-                xanchor='left',
-                yanchor='top'
-            ),
-            margin=dict(l=20, r=20, t=30, b=20),
-            plot_bgcolor='rgba(240, 240, 240, 0.8)',
-            height=800,
-            width=1000,
-            scene_aspectmode='data',
-            dragmode=False
-        )
-        
-        return fig
-    
-    def setup_layout(self):
-        """Set up the Dash app layout."""
-        # Create marks for frame slider
-        frame_marks = {i: {"label": f"{self.time_stamps[i]:.2f}"} 
-                      for i in range(0, len(self.time_stamps), max(1, len(self.time_stamps) // 10))}
-        
-        # Create marks for speed slider
-        speed_marks = {i: {"label": f"{(1000*self.time_step/self.speed_values[i]):.2f}x"} 
-                      for i in range(len(self.speed_values))}
-        
-        self.app.layout = html.Div([
-            html.H1("AMR Movement with LiDAR Data Visualization"),
-            
-            # Main graph
-            dcc.Graph(id='amr-graph', style={'height': '800px'}),
-            
-            html.Div([
-                # Frame slider
-                html.Div([
-                    html.Label("Timeline:"),
-                    dcc.Slider(
-                        id='frame-slider',
-                        min=0,
-                        max=len(self.time_stamps) - 1,
-                        value=0,
-                        marks=frame_marks,
-                        step=1
-                    )
-                ], style={'width': '100%', 'padding': '20px'}),
-                
-                # Speed slider
-                html.Div([
-                    html.Label("Playback Speed:"),
-                    dcc.Slider(
-                        id='speed-slider',
-                        min=0,
-                        max=len(self.speed_values) - 1,
-                        value=0,  # Default to first speed
-                        marks=speed_marks,
-                        step=None
-                    )
-                ], style={'width': '100%', 'padding': '20px'}),
-                
-                # Play/pause button
-                html.Div([
-                    html.Button('Play', id='play-button', n_clicks=0)
-                ], style={'padding': '20px'})
-            ]),
-            
-            # Store current state
-            dcc.Store(id='playing-state', data={'is_playing': False}),
-            
-            # Interval component for animation
-            dcc.Interval(
-                id='animation-interval',
-                interval=self.time_step * 1000,  # in milliseconds
-                n_intervals=0,
-                disabled=True
-            )
-        ])
-    
-    def setup_callbacks(self):
-        """Set up the Dash app callbacks."""
-        # Callback to update graph based on frame slider and speed
-        @self.app.callback(
-            Output('amr-graph', 'figure'),
-            [Input('frame-slider', 'value'),
-             Input('speed-slider', 'value')]
-        )
-        def update_graph(frame_idx, speed_idx):
-            # Default speed index to 0 if None
-            speed_idx = 0 if speed_idx is None else speed_idx
-            frame_duration = self.speed_values[speed_idx]
-            return self.create_figure(frame_idx, frame_duration)
-        
-        # Callback to handle play/pause
-        @self.app.callback(
-            [Output('animation-interval', 'disabled'),
-             Output('animation-interval', 'interval'),
-             Output('play-button', 'children'),
-             Output('playing-state', 'data')],
-            [Input('play-button', 'n_clicks'),
-             Input('speed-slider', 'value')],
-            [State('playing-state', 'data')]
-        )
-        def toggle_animation(n_clicks, speed_idx, playing_state):
-            # Determine if we should be playing based on button clicks
-            is_playing = not playing_state['is_playing'] if n_clicks > 0 else playing_state['is_playing']
-            
-            # Default speed index to 0 if None
-            speed_idx = 0 if speed_idx is None else speed_idx
-            frame_duration = self.speed_values[speed_idx]
-            
-            # Update interval based on frame duration
-            interval = frame_duration
-            
-            # Update button text
-            button_text = 'Pause' if is_playing else 'Play'
-            
-            # Update playing state
-            new_state = {'is_playing': is_playing}
-            
-            return not is_playing, interval, button_text, new_state
-        
-        # Callback to update frame based on interval
-        @self.app.callback(
-            Output('frame-slider', 'value'),
-            [Input('animation-interval', 'n_intervals')],
-            [State('frame-slider', 'value'),
-             State('playing-state', 'data')]
-        )
-        def update_frame(n_intervals, current_frame, playing_state):
-            if not playing_state['is_playing']:
-                return current_frame
-                
-            next_frame = (current_frame + 1) % len(self.time_stamps)
-            return next_frame
-    
-    def run_server(self, debug=True, port=8050):
-        """Run the Dash app server."""
-        self.app.run(debug=debug, port=port)
 
 def transform_lidar_points(
     ranges: np.ndarray,
@@ -434,100 +95,6 @@ def load_json_files(path_to_jsons, sample_size, frame_step):
     print(f"\nLoaded {len(data)} frames (Step = {frame_step})")
                                 
     return data
-
-
-def read_data(data, savepath, filename="robot_lidar_data.json"):
-    """Extract robot positions, orientations, and pointcloud data from JSON files.
-    
-    Note: Using Unity coordinate system where X-Z is the floor plane and Y is up.
-    """
-    robot_data = defaultdict(lambda: {
-        "timestamps": [],
-        "robot_positions": [],
-        "robot_orientations": [],
-        "pointclouds": []
-    })
-
-    for frame_index, frame in tqdm(list(enumerate(data)), ascii="░▒█", desc="Processing JSON files", unit="frame"):
-        timestamp = frame.get("timestamp", frame_index)  # Use frame index if timestamp not available
-
-        # Filter out 2D lidars
-        lidars = [o for o in frame.get("captures", []) if o.get('@type') == 'type.custom/solo.2DLidar']
-
-        # Track which robots we've processed in this frame
-        processed_robots = set()
-
-        for lidar in lidars:
-            amr_id = "_".join(lidar["id"].split("_")[:2])  # e.g., "AMR_1"
-            
-            # Skip if we've already processed this robot in the current frame
-            if amr_id in processed_robots:
-                continue
-            
-            processed_robots.add(amr_id)
-
-            # Get robot position and orientation
-            robot_position_raw = lidar.get("robotPosition", [0, 0, 0])
-            robot_yaw_raw = lidar.get("robotRotationEuler", [0, 0, 0])  # In radians
-            
-            # Take X and Z only (floor plan view in Unity)
-            robot_position = [robot_position_raw[0], robot_position_raw[2]]
-            
-            # In Unity, y-axis rotation gives the yaw in the x-z plane
-            # The rotation around y-axis corresponds to the angle in the x-z plane
-            robot_orientation = [np.cos(robot_yaw_raw), np.sin(robot_yaw_raw)]
-
-            # Add robot data for this frame
-            robot_data[amr_id]["timestamps"].append(timestamp)
-            robot_data[amr_id]["robot_positions"].append(robot_position)
-            robot_data[amr_id]["robot_orientations"].append(robot_orientation)
-            
-            # Process all pointclouds for this robot
-            all_points = []
-            
-            # Loop through all lidars for this robot to collect point cloud data
-            robot_lidars = [l for l in lidars if "_".join(l["id"].split("_")[:2]) == amr_id]
-            
-            for robot_lidar in robot_lidars:
-                # Global lidar pose
-                lidar_position = np.array(robot_lidar.get("globalPosition", [0, 0, 0]))
-                lidar_quaternion = np.array(robot_lidar.get("globalRotation", [0, 0, 0, 1]))
-                
-                # Process annotations (lidar scan data)
-                for annot in robot_lidar.get("annotations", []):
-                    ranges = np.array(annot.get("ranges", []))
-                    angles = np.array(annot.get("angles", []))
-                    classes = annot.get("object_classes", ["unknown"] * len(ranges))
-                    
-                    # Skip if no data
-                    if len(ranges) == 0 or len(angles) == 0:
-                        continue
-                    
-                    # Transform points to global frame (Unity coordinates)
-                    pointcloud_x, pointcloud_z = transform_lidar_points(
-                        ranges, angles, lidar_position, lidar_quaternion
-                    )
-                    
-                    # Add transformed points to the collection
-                    for x, z, c in zip(pointcloud_x, pointcloud_z, classes):
-                        all_points.append({"x": float(x), "z": float(z), "class": c})
-            
-            # Add pointcloud data for this robot in this frame
-            robot_data[amr_id]["pointclouds"].append(all_points)
-    
-    # Save data as JSON
-    os.makedirs(savepath, exist_ok=True)
-    filepath = os.path.join(savepath, filename)
-    
-    # Convert to regular dict for JSON serialization
-    robot_data_dict = {k: dict(v) for k, v in robot_data.items()}
-    
-    with open(filepath, 'w') as f:
-        json.dump(robot_data_dict, f, indent=2)
-    
-    print(f"\n✅ Robot and LiDAR data saved to {filepath}")
-    
-    return robot_data
 
 
 def read_data_with_offset(data, savepath, offset=0.1*(1/3), filename="robot_lidar_data_transform_offset.json"):
@@ -679,6 +246,477 @@ def read_data_with_offset(data, savepath, offset=0.1*(1/3), filename="robot_lida
     print(f"\n✅ Robot and LiDAR data with {offset}s transform offset saved to {filepath}")
     
     return robot_data
+
+
+def create_robot_shape(x, y, orientation, size=2):
+    """Create a robot shape (trapezoid) at the given position and orientation."""
+    # Calculate angle from orientation vector
+    angle = np.arctan2(orientation[1], orientation[0])
+    
+    # Define trapezoid in local coordinates (centered at origin)
+    front_width = size * 0.6
+    back_width = size * 1.2
+    length = size * 2
+    
+    local_points = np.array([
+        [length/2, -front_width/2],  # front left
+        [length/2, front_width/2],   # front right
+        [-length/2, back_width/2],   # back right
+        [-length/2, -back_width/2],  # back left
+        [length/2, -front_width/2]   # close the shape
+    ])
+    
+    # Create rotation matrix
+    rotation = np.array([
+        [np.sin(angle), -np.cos(angle)],
+        [np.cos(angle), np.sin(angle)]
+    ])
+    
+    # Apply rotation and translation to all points
+    transformed_points = np.dot(local_points, rotation.T) + np.array([x, y])
+    
+    # Split into x and y coordinates
+    points_x = transformed_points[:, 0].tolist()
+    points_y = transformed_points[:, 1].tolist()
+    
+    return points_x, points_y
+
+
+def calculate_bounds(robot_data):
+    """Calculate bounds for all frames across all robots."""
+    all_x = []
+    all_z = []
+    
+    for robot_id, data in robot_data.items():
+        # Get all robot positions across all frames
+        all_x.extend([pos[0] for pos in data["robot_positions"]])
+        all_z.extend([pos[1] for pos in data["robot_positions"]])
+        
+        # Include pointcloud data from all frames
+        for pointcloud in data["pointclouds"]:
+            all_x.extend([p["x"] for p in pointcloud])
+            all_z.extend([p["z"] for p in pointcloud])
+    
+    # Calculate the view bounds
+    useful_axis_part = 0.4
+    x_min, x_max = min(all_x)*useful_axis_part, max(all_x)*useful_axis_part
+    z_min, z_max = min(all_z)*useful_axis_part, max(all_z)*useful_axis_part
+    
+    return [x_min, x_max], [z_min, z_max]
+
+
+def prepare_visualization_data(robot_data, class_color_map):
+    """Prepare visualization data for Plotly."""
+    # Define unique colors for each robot
+    robot_colors = {
+        robot_id: f'rgb({hash(robot_id) % 200},{(hash(robot_id) * 13) % 200},{(hash(robot_id) * 29) % 200})'
+        for robot_id in robot_data.keys()
+    }
+    
+    # Get common timestamps across all robots
+    time_stamps = sorted(list(robot_data.values())[0]["timestamps"])
+    
+    # Calculate bounds
+    x_axis_range, z_axis_range = calculate_bounds(robot_data)
+    
+    # Prepare data for each frame
+    frames_data = []
+    for frame_idx in range(len(time_stamps)):
+        frame_traces = []
+        
+        # Add pointcloud traces
+        for robot_id, data in robot_data.items():
+            # Pointcloud data for this frame
+            pointclouds = data["pointclouds"][frame_idx]
+            pointcloud_x = [p["x"] for p in pointclouds]
+            pointcloud_z = [p["z"] for p in pointclouds]
+            pointcloud_classes = [p.get("class", "unknown") for p in pointclouds]
+            
+            # Map classes to colors
+            colors = [class_color_map.get(cls, 'rgba(150, 150, 150, 0.7)') for cls in pointcloud_classes]
+            
+            # Add pointcloud trace
+            frame_traces.append({
+                "type": "scatter",
+                "x": pointcloud_x,
+                "y": pointcloud_z,
+                "mode": "markers",
+                "marker": {
+                    "color": colors,
+                    "size": 4,
+                    "opacity": 0.7
+                },
+                "name": f"{robot_id} (LiDAR)",
+                "showlegend": False,
+                "hoverinfo": "none"
+            })
+        
+        # Add robot path traces
+        for robot_id, data in robot_data.items():
+            robot_color = robot_colors[robot_id]
+            
+            # Collect all positions up to current frame for path
+            path_x = [pos[0] for pos in data["robot_positions"][:frame_idx+1]]
+            path_y = [pos[1] for pos in data["robot_positions"][:frame_idx+1]]
+            
+            frame_traces.append({
+                "type": "scatter",
+                "x": path_x,
+                "y": path_y,
+                "mode": "lines",
+                "line": {"color": robot_color, "width": 2},
+                "name": f"{robot_id} (Path)",
+                "showlegend": False,
+                "hoverinfo": "none"
+            })
+        
+        # Add robot shape traces
+        for robot_id, data in robot_data.items():
+            robot_color = robot_colors[robot_id]
+            
+            # Robot position and orientation for this frame
+            robot_pos = data["robot_positions"][frame_idx]
+            robot_orient = data["robot_orientations"][frame_idx]
+            
+            # Create robot shape
+            shape_x, shape_y = create_robot_shape(
+                robot_pos[0], robot_pos[1], robot_orient
+            )
+            
+            frame_traces.append({
+                "type": "scatter",
+                "x": shape_x,
+                "y": shape_y,
+                "mode": "lines",
+                "fill": "toself",
+                "fillcolor": robot_color,
+                "line": {"color": robot_color, "width": 1},
+                "name": f"{robot_id}",
+                "text": f"{robot_id} @ {time_stamps[frame_idx]:.2f}",
+                "hoverinfo": "text"
+            })
+        
+        frames_data.append({
+            "name": str(frame_idx),
+            "data": frame_traces,
+            "timestamp": time_stamps[frame_idx]
+        })
+    
+    # Create initial traces for legend
+    init_traces = []
+    
+    # Add class legend traces
+    for class_name, color in class_color_map.items():
+        init_traces.append({
+            "type": "scatter",
+            "x": [None],
+            "y": [None],
+            "mode": "markers",
+            "marker": {
+                "size": 10,
+                "color": color
+            },
+            "name": f"{class_name}",
+            "showlegend": True
+        })
+    
+    # Add robot legend traces
+    for robot_id, color in robot_colors.items():
+        init_traces.append({
+            "type": "scatter",
+            "x": [None],
+            "y": [None],
+            "mode": "lines",
+            "line": {"color": color, "width": 2},
+            "name": f"{robot_id}",
+            "showlegend": True
+        })
+    
+    return {
+        "frames": frames_data,
+        "init_traces": init_traces,
+        "x_axis_range": x_axis_range,
+        "z_axis_range": z_axis_range,
+        "time_stamps": time_stamps,
+        "robot_colors": robot_colors
+    }
+
+
+def create_html_visualization(robot_data, class_color_map, frame_step, time_step, save_path, filename="AMR LiDAR Visualization.html"):
+    """Create a self-contained HTML visualization."""
+    # Prepare visualization data
+    viz_data = prepare_visualization_data(robot_data, class_color_map)
+    
+    # Convert data to JSON for JavaScript
+    import json
+    json_data = json.dumps(viz_data)
+    
+    # Create HTML content
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>AMR Movement with LiDAR Data Visualization</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }}
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            border-radius: 5px;
+        }}
+        h1 {{
+            color: #333;
+            text-align: center;
+        }}
+        .graph-container {{
+            height: 800px;
+            width: 100%;
+            margin-bottom: 20px;
+        }}
+        .controls {{
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 20px;
+        }}
+        .slider-container {{
+            flex: 1;
+            min-width: 300px;
+        }}
+        .button-container {{
+            display: flex;
+            gap: 10px;
+        }}
+        button {{
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }}
+        button:hover {{
+            background-color: #45a049;
+        }}
+        .time-display {{
+            font-size: 16px;
+            font-weight: bold;
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+            border-radius: 4px;
+            background: #f9f9f9;
+        }}
+        .slider {{
+            width: 100%;
+        }}
+        label {{
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AMR Movement with LiDAR Data Visualization</h1>
+        
+        <div class="graph-container" id="amr-graph"></div>
+        
+        <div class="controls">
+            <div class="time-display" id="time-display">Time: 0.00s</div>
+            
+            <div class="slider-container">
+                <label for="frame-slider">Timeline:</label>
+                <input type="range" id="frame-slider" class="slider" min="0" max="0" value="0">
+            </div>
+            
+            <div class="slider-container">
+                <label for="speed-slider">Playback Speed:</label>
+                <select id="speed-slider">
+                    <option value="1000">0.03x</option>
+                    <option value="500">0.07x</option>
+                    <option value="333.33">0.10x</option>
+                    <option value="250">0.13x</option>
+                    <option value="200">0.17x</option>
+                    <option value="125">0.27x</option>
+                    <option value="100" selected>0.33x</option>
+                </select>
+            </div>
+            
+            <div class="button-container">
+                <button id="play-button">Play</button>
+                <button id="reset-button">Reset</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Load data
+        const vizData = {json_data};
+        
+        // Setup variables
+        let currentFrame = 0;
+        let isPlaying = false;
+        let animationId = null;
+        let lastTime = 0;
+        const timeStep = {time_step};
+        let playbackSpeed = 100; // Default speed (milliseconds per frame)
+        
+        // DOM elements
+        const graphDiv = document.getElementById('amr-graph');
+        const frameSlider = document.getElementById('frame-slider');
+        const speedSlider = document.getElementById('speed-slider');
+        const playButton = document.getElementById('play-button');
+        const resetButton = document.getElementById('reset-button');
+        const timeDisplay = document.getElementById('time-display');
+        
+        // Set up slider
+        frameSlider.max = vizData.frames.length - 1;
+        
+        // Create initial plot
+        function createPlot() {{
+            const layout = {{
+                title: 'AMR Movement with LiDAR Data (Unity Coordinates)',
+                xaxis: {{
+                    title: 'X Position (Unity)',
+                    range: vizData.x_axis_range,
+                    scaleanchor: 'y',
+                    scaleratio: 1,
+                    fixedrange: true,
+                    constrain: 'domain'
+                }},
+                yaxis: {{
+                    title: 'Z Position (Unity)',
+                    range: vizData.z_axis_range,
+                    fixedrange: true,
+                    constrain: 'domain'
+                }},
+                legend: {{
+                    x: 1.05,
+                    y: 1,
+                    xanchor: 'left',
+                    yanchor: 'top'
+                }},
+                margin: {{l: 50, r: 50, t: 50, b: 50}},
+                plot_bgcolor: 'rgba(240, 240, 240, 0.8)',
+                height: 800,
+                dragmode: false
+            }};
+            
+            Plotly.newPlot(graphDiv, vizData.init_traces, layout);
+            updateFrame(0);
+        }}
+        
+        // Update to a specific frame
+        function updateFrame(frameIndex) {{
+            // Ensure frame index is within bounds
+            frameIndex = Math.max(0, Math.min(frameIndex, vizData.frames.length - 1));
+            currentFrame = frameIndex;
+            
+            // Update slider
+            frameSlider.value = frameIndex;
+            
+            // Update time display
+            const timestamp = vizData.frames[frameIndex].timestamp;
+            timeDisplay.textContent = `Time: ${{timestamp.toFixed(2)}}s`;
+            
+            // Update plot with new data
+            Plotly.animate(graphDiv, {{
+                data: vizData.frames[frameIndex].data,
+                traces: Array.from({{length: vizData.frames[frameIndex].data.length}}, (_, i) => i),
+                layout: {{}}
+            }}, {{
+                transition: {{duration: 0}},
+                frame: {{duration: 0, redraw: false}}
+            }});
+        }}
+        
+        // Animation function
+        function animate(timestamp) {{
+            if (!lastTime) lastTime = timestamp;
+            
+            const elapsed = timestamp - lastTime;
+            
+            if (elapsed > playbackSpeed) {{
+                // Update to next frame
+                if (currentFrame < vizData.frames.length - 1) {{
+                    updateFrame(currentFrame + 1);
+                }} else {{
+                    // Loop back to beginning
+                    updateFrame(0);
+                }}
+                
+                lastTime = timestamp;
+            }}
+            
+            if (isPlaying) {{
+                animationId = requestAnimationFrame(animate);
+            }}
+        }}
+        
+        // Play/pause toggle
+        function togglePlay() {{
+            isPlaying = !isPlaying;
+            
+            if (isPlaying) {{
+                playButton.textContent = 'Pause';
+                lastTime = 0;
+                animationId = requestAnimationFrame(animate);
+            }} else {{
+                playButton.textContent = 'Play';
+                if (animationId) {{
+                    cancelAnimationFrame(animationId);
+                    animationId = null;
+                }}
+            }}
+        }}
+        
+        // Reset to beginning
+        function resetAnimation() {{
+            if (isPlaying) {{
+                togglePlay();
+            }}
+            updateFrame(0);
+        }}
+        
+        // Event listeners
+        playButton.addEventListener('click', togglePlay);
+        resetButton.addEventListener('click', resetAnimation);
+        
+        frameSlider.addEventListener('input', () => {{
+            updateFrame(parseInt(frameSlider.value, 10));
+        }});
+        
+        speedSlider.addEventListener('change', () => {{
+            playbackSpeed = parseFloat(speedSlider.value);
+        }});
+        
+        // Initialize
+        createPlot();
+    </script>
+</body>
+</html>
+"""
+    
+    # Save HTML file
+    os.makedirs(save_path, exist_ok=True)
+    html_path = os.path.join(save_path, filename)
+    
+    with open(html_path, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    
+    print(f"\n✅ HTML visualization saved to {html_path}")
+
 
 if __name__ == "__main__":
     main()
