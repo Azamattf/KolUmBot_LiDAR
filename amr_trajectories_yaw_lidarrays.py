@@ -15,7 +15,7 @@ def main():
     path_to_sem_def = os.path.join(path_to_dataset, "class_definition_semantic_segmentation.json")
       
     # Processing parameters
-    sample_size = ""   # upper sampling bound, set to "" for all frames
+    sample_size = 1000   # upper sampling bound, set to "" for all frames
     frame_step = 10
     time_step = 0.033333335*frame_step
     
@@ -25,7 +25,7 @@ def main():
     class_def = load_class_definitions(path_to_sem_def)
     
     # Create and save HTML
-    create_html_visualization(robot_data, class_def, frame_step, time_step, save_path)
+    create_html_visualization(robot_data, class_def, frame_step, time_step, save_path, json_files)
 
 
 def load_class_definitions(filepath):
@@ -76,9 +76,9 @@ def transform_lidar_points(
 def load_json_files(path_to_jsons, sample_size, frame_step):
     """Load JSON files from the specified directory with given frame step."""
     data = []
+    json_files = [f for f in natsorted(os.listdir(path_to_jsons)) if f.endswith(".json")]
     sample_size = int(sample_size) if str(sample_size).isdigit() else len(json_files)
-    json_files = [f for f in natsorted(os.listdir(path_to_jsons)) if f.endswith(".json")][:sample_size]
-    sampled_files = json_files[::frame_step]
+    sampled_files = json_files[:sample_size][::frame_step]
     
     print("\nFirst 5 sampled files:")
     print(f"{sampled_files[:5]} ...")
@@ -442,7 +442,7 @@ def prepare_visualization_data(robot_data, class_color_map):
         "robot_colors": robot_colors
     }
 
-def create_html_visualization(robot_data, class_color_map, frame_step, time_step, save_path, filename="AMR LiDAR Visualization.html"):
+def create_html_visualization(robot_data, class_color_map, frame_step, time_step, save_path, n_frames, filename="AMR LiDAR Visualization.html"):
     """Create a self-contained HTML visualization."""
     # Prepare visualization data
     viz_data = prepare_visualization_data(robot_data, class_color_map)
@@ -583,7 +583,7 @@ def create_html_visualization(robot_data, class_color_map, frame_step, time_step
         </div>
         
         <div class="info-panel">
-            <p><strong>Frame Step:</strong> {frame_step} | <strong>Time Step:</strong> {time_step:.4f}s</p>
+            <p><strong>Frame Step:</strong> {frame_step} | <strong>Time Step:</strong> {time_step:.4f}s | <strong>Total number of frames:</strong> {len(n_frames)}</p>
             <p>Playback speeds are calculated relative to real-time, where 1.0x represents the real-time speed.</p>
         </div>
     </div>
