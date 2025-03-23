@@ -15,7 +15,7 @@ def main():
     path_to_sem_def = os.path.join(path_to_dataset, "class_definition_semantic_segmentation.json")
       
     # Processing parameters
-    sample_size = 1000
+    sample_size = ""   # upper sampling bound, set to "" for all frames
     frame_step = 10
     time_step = 0.033333335*frame_step
     
@@ -76,6 +76,7 @@ def transform_lidar_points(
 def load_json_files(path_to_jsons, sample_size, frame_step):
     """Load JSON files from the specified directory with given frame step."""
     data = []
+    sample_size = int(sample_size) if str(sample_size).isdigit() else len(json_files)
     json_files = [f for f in natsorted(os.listdir(path_to_jsons)) if f.endswith(".json")][:sample_size]
     sampled_files = json_files[::frame_step]
     
@@ -97,7 +98,7 @@ def load_json_files(path_to_jsons, sample_size, frame_step):
     return data
 
 
-def read_data_with_offset(data, savepath, offset=0.1*(1/3), filename="robot_lidar_data_transform_offset.json"):
+def read_data_with_offset(data, savepath, offset=0.3*(1/3), filename="robot_lidar_data_transform_offset.json"):
     """Extract robot positions, orientations, and pointcloud data from JSON files,
     applying a temporal offset between lidar pose and pointcloud data.
     
@@ -298,9 +299,9 @@ def calculate_bounds(robot_data):
             all_z.extend([p["z"] for p in pointcloud])
     
     # Calculate the view bounds
-    useful_axis_part = 0.4
-    x_min, x_max = min(all_x)*useful_axis_part, max(all_x)*useful_axis_part
-    z_min, z_max = min(all_z)*useful_axis_part, max(all_z)*useful_axis_part
+    useful_axis_part = 0.5
+    x_min, x_max = min(all_x)*useful_axis_part, max(all_x)*useful_axis_part*0.8
+    z_min, z_max = min(all_z)*useful_axis_part*0.8, max(all_z)*useful_axis_part
     
     return [x_min, x_max], [z_min, z_max]
 
@@ -441,7 +442,6 @@ def prepare_visualization_data(robot_data, class_color_map):
         "robot_colors": robot_colors
     }
 
-
 def create_html_visualization(robot_data, class_color_map, frame_step, time_step, save_path, filename="AMR LiDAR Visualization.html"):
     """Create a self-contained HTML visualization."""
     # Prepare visualization data
@@ -450,6 +450,28 @@ def create_html_visualization(robot_data, class_color_map, frame_step, time_step
     # Convert data to JSON for JavaScript
     import json
     json_data = json.dumps(viz_data)
+    
+    # Calculate playback speed options dynamically based on time_step
+    # Define desired speed multipliers (relative to real-time)
+    speed_multipliers = [0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0]
+    
+    # Calculate corresponding millisecond delays for each multiplier
+    # Formula: delay_ms = (time_step * 1000) / multiplier
+    speed_options = []
+    for multiplier in speed_multipliers:
+        delay_ms = round((time_step * 1000) / multiplier)
+        speed_options.append({
+            "value": delay_ms,
+            "label": f"{multiplier:.2f}x",
+            "multiplier": multiplier
+        })
+    
+    # Create the options HTML
+    speed_options_html = ""
+    for option in speed_options:
+        # Make 1.0x the default selected option
+        selected = " selected" if abs(option["multiplier"] - 1.0) < 0.01 else ""
+        speed_options_html += f'<option value="{option["value"]}"{selected}>{option["label"]}</option>\n'
     
     # Create HTML content
     html_content = f"""<!DOCTYPE html>
@@ -524,11 +546,18 @@ def create_html_visualization(robot_data, class_color_map, frame_step, time_step
             margin-bottom: 5px;
             font-weight: bold;
         }}
+        .info-panel {{
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f0f8ff;
+            border-radius: 4px;
+            font-size: 14px;
+        }}
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>AMR Movement with LiDAR Data Visualization</h1>
+        <h1 style = "font-size: 16px; padding-top: 20px">AMR Movement with LiDAR Data Visualization</h1>
         
         <div class="graph-container" id="amr-graph"></div>
         
@@ -543,13 +572,7 @@ def create_html_visualization(robot_data, class_color_map, frame_step, time_step
             <div class="slider-container">
                 <label for="speed-slider">Playback Speed:</label>
                 <select id="speed-slider">
-                    <option value="1000">0.03x</option>
-                    <option value="500">0.07x</option>
-                    <option value="333.33">0.10x</option>
-                    <option value="250">0.13x</option>
-                    <option value="200">0.17x</option>
-                    <option value="125">0.27x</option>
-                    <option value="100" selected>0.33x</option>
+                    {speed_options_html}
                 </select>
             </div>
             
@@ -557,6 +580,11 @@ def create_html_visualization(robot_data, class_color_map, frame_step, time_step
                 <button id="play-button">Play</button>
                 <button id="reset-button">Reset</button>
             </div>
+        </div>
+        
+        <div class="info-panel">
+            <p><strong>Frame Step:</strong> {frame_step} | <strong>Time Step:</strong> {time_step:.4f}s</p>
+            <p>Playback speeds are calculated relative to real-time, where 1.0x represents the real-time speed.</p>
         </div>
     </div>
 
@@ -570,7 +598,7 @@ def create_html_visualization(robot_data, class_color_map, frame_step, time_step
         let animationId = null;
         let lastTime = 0;
         const timeStep = {time_step};
-        let playbackSpeed = 100; // Default speed (milliseconds per frame)
+        let playbackSpeed = {speed_options[3]["value"]}; // Default to 1.0x
         
         // DOM elements
         const graphDiv = document.getElementById('amr-graph');
@@ -586,7 +614,6 @@ def create_html_visualization(robot_data, class_color_map, frame_step, time_step
         // Create initial plot
         function createPlot() {{
             const layout = {{
-                title: 'AMR Movement with LiDAR Data (Unity Coordinates)',
                 xaxis: {{
                     title: 'X Position (Unity)',
                     range: vizData.x_axis_range,
@@ -716,7 +743,8 @@ def create_html_visualization(robot_data, class_color_map, frame_step, time_step
         f.write(html_content)
     
     print(f"\n✅ HTML visualization saved to {html_path}")
-
+    print(f"   Time step: {time_step:.4f}s (based on frame_step of {frame_step})")
+    print(f"   Playback speed options: {', '.join([opt['label'] for opt in speed_options])}")
 
 if __name__ == "__main__":
     main()
