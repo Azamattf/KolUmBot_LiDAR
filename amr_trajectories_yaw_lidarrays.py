@@ -15,7 +15,7 @@ def main():
     path_to_sem_def = os.path.join(path_to_dataset, "class_definition_semantic_segmentation.json")
       
     # Processing parameters
-    sample_size = 1000   # upper sampling bound, set to "" for all frames
+    sample_size = ""   # upper sampling bound, set to "" for all frames
     frame_step = 10
     time_step = 0.033333335*frame_step
     
