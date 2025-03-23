@@ -1,6 +1,10 @@
 import os
 import json
 import numpy as np
+import dash
+from dash import dcc, html
+from dash.dependencies import Input, Output, State
+from dash_recorder import Recorder
 import plotly.graph_objects as go
 from natsort import natsorted
 from collections import defaultdict
@@ -28,9 +32,8 @@ def main():
     class_def = load_class_definitions(path_to_sem_def)
 
     # Create visualization
-    visualizer = Visualizer(robot_data, class_def, frame_step, time_step)
-    visualizer.animate()
-    visualizer.save_animation(save_path)
+    visualizer = DashVisualizer(robot_data, class_def, frame_step, time_step)
+    visualizer.run_server()
 
 
 def load_class_definitions(filepath):
@@ -50,13 +53,12 @@ def load_class_definitions(filepath):
     return color_map
 
 
-class Visualizer:
+class DashVisualizer:
     def __init__(self, robot_data, class_color_map, frame_step, time_step):
         self.robot_data = robot_data
         self.class_color_map = class_color_map
         self.frame_step = frame_step
         self.time_step = time_step
-        self.fig = go.Figure()
         
         # Define unique colors for each robot
         self.robot_colors = {
@@ -64,15 +66,45 @@ class Visualizer:
             for robot_id in robot_data.keys()
         }
         
-        self.robot_shapes = {}  # Store robot shape traces
-        self.robot_paths = {}   # Store robot path traces
-        self.pointcloud_traces = {}  # Store pointcloud traces
-        
         # Get common timestamps across all robots
         self.time_stamps = sorted(list(robot_data.values())[0]["timestamps"])
         
-    def create_robot_shape(self, x, y, orientation, robot_id, size=2):
+        # Prepare speed values for the slider
+        self.speed_values = np.array([1000, 500, 333.33, 250, 200, 125, 100])
         
+        # Calculate bounds for all frames
+        self.calculate_bounds()
+        
+        # Create app
+        self.app = dash.Dash(__name__)
+        self.setup_layout()
+        self.setup_callbacks()
+        
+    def calculate_bounds(self):
+        """Calculate bounds for all frames across all robots."""
+        all_x = []
+        all_z = []
+        
+        for robot_id, data in self.robot_data.items():
+            # Get all robot positions across all frames
+            all_x.extend([pos[0] for pos in data["robot_positions"]])
+            all_z.extend([pos[1] for pos in data["robot_positions"]])
+            
+            # Include pointcloud data from all frames
+            for pointcloud in data["pointclouds"]:
+                all_x.extend([p["x"] for p in pointcloud])
+                all_z.extend([p["z"] for p in pointcloud])
+        
+        # Calculate the view bounds
+        useful_axis_part = 0.4
+        self.x_min, self.x_max = min(all_x)*useful_axis_part, max(all_x)*useful_axis_part
+        self.z_min, self.z_max = min(all_z)*useful_axis_part, max(all_z)*useful_axis_part
+        
+        self.x_axis_range = [self.x_min, self.x_max]
+        self.z_axis_range = [self.z_min, self.z_max]
+
+    def create_robot_shape(self, x, y, orientation, robot_id, size=2):
+        """Create a robot shape (trapezoid) at the given position and orientation."""
         # Calculate angle from orientation vector
         angle = np.arctan2(orientation[1], orientation[0])
         
@@ -113,66 +145,22 @@ class Visualizer:
             class_colors.append(color)
         return class_colors
     
-    def add_pointcloud_legend(self):
-        """Add a legend showing the color mapping for semantic classes."""
-        # Use the existing class_color_map directly
-        for class_name, color in self.class_color_map.items():
-            # Add an invisible scatter point with the class name and color
-            self.fig.add_trace(go.Scatter(
-                x=[None], 
-                y=[None],
-                mode='markers',
-                marker=dict(
-                    size=10,
-                    color=color
-                ),
-                name=f"{class_name}",
-                showlegend=True
-            ))
-
-    def animate(self):
-        """Create animation with robot movements and LiDAR pointclouds."""
-        # First, compute the bounds across ALL frames and robots
-        all_x = []
-        all_z = []
+    def create_figure(self, frame_idx, frame_duration):
+        """Create a figure for the specified frame with the given frame duration."""
+        fig = go.Figure()
         
+        timestamp = self.time_stamps[frame_idx]
+        
+        # Add pointcloud traces
         for robot_id, data in self.robot_data.items():
-            # Get all robot positions across all frames
-            all_x.extend([pos[0] for pos in data["robot_positions"]])
-            all_z.extend([pos[1] for pos in data["robot_positions"]])
-            
-            # Include pointcloud data from all frames
-            for pointcloud in data["pointclouds"]:
-                all_x.extend([p["x"] for p in pointcloud])
-                all_z.extend([p["z"] for p in pointcloud])
-        
-        # 1. Calculate fixed BOUNDS
-
-        useful_axis_part = 0.4
-        x_min, x_max = min(all_x)*useful_axis_part, max(all_x)*useful_axis_part
-        z_min, z_max = min(all_z)*useful_axis_part, max(all_z)*useful_axis_part
-
-        x_axis_range = [x_min, x_max]
-        z_axis_range = [z_min, z_max]
-        
-        # The proper ordering to ensure robots appear on top:
-        # 1. First all pointcloud traces
-        # 2. Then all path traces
-        # 3. Finally all robot shape traces
-        
-        # 2. INITIALIZE
-
-        # Initialize pointcloud traces first
-        for robot_id, data in self.robot_data.items():
-            # Initial pointcloud data
-            pointclouds = data["pointclouds"][0]
+            # Pointcloud data for this frame
+            pointclouds = data["pointclouds"][frame_idx]
             pointcloud_x = [p["x"] for p in pointclouds]
             pointcloud_z = [p["z"] for p in pointclouds]
             pointcloud_classes = [p.get("class", "unknown") for p in pointclouds]
             colors = self.map_classes_to_colors(pointcloud_classes)
             
-            # Add pointcloud trace
-            self.pointcloud_traces[robot_id] = go.Scatter(
+            fig.add_trace(go.Scatter(
                 x=pointcloud_x,
                 y=pointcloud_z,
                 mode="markers",
@@ -183,226 +171,80 @@ class Visualizer:
                 ),
                 name=f"{robot_id} (LiDAR)",
                 showlegend=False
-            )
-            self.fig.add_trace(self.pointcloud_traces[robot_id])
+            ))
         
-        # Then initialize path traces
+        # Add robot path traces
         for robot_id, data in self.robot_data.items():
             robot_color = self.robot_colors[robot_id]
-            initial_pos = data["robot_positions"][0]
             
-            # Add robot path trace (initially empty)
-            self.robot_paths[robot_id] = go.Scatter(
-                x=[initial_pos[0]],
-                y=[initial_pos[1]],
+            # Collect all positions up to current frame for path
+            path_x = [pos[0] for pos in data["robot_positions"][:frame_idx+1]]
+            path_y = [pos[1] for pos in data["robot_positions"][:frame_idx+1]]
+            
+            fig.add_trace(go.Scatter(
+                x=path_x,
+                y=path_y,
                 mode="lines",
                 line=dict(color=robot_color, width=2),
                 name=f"{robot_id} (Path)",
                 showlegend=False
-            )
-            self.fig.add_trace(self.robot_paths[robot_id])
+            ))
         
-        # Finally initialize robot shape traces
+        # Add robot shape traces
         for robot_id, data in self.robot_data.items():
             robot_color = self.robot_colors[robot_id]
             
-            # Initial position and orientation
-            initial_pos = data["robot_positions"][0]
-            initial_orient = data["robot_orientations"][0]
+            # Robot position and orientation for this frame
+            robot_pos = data["robot_positions"][frame_idx]
+            robot_orient = data["robot_orientations"][frame_idx]
             
-            # Create robot shape (trapezoid)
+            # Create robot shape
             shape_x, shape_y = self.create_robot_shape(
-                initial_pos[0], initial_pos[1], initial_orient, robot_id
+                robot_pos[0], robot_pos[1], robot_orient, robot_id
             )
             
-            # Add robot shape trace
-            self.robot_shapes[robot_id] = go.Scatter(
+            fig.add_trace(go.Scatter(
                 x=shape_x,
                 y=shape_y,
                 mode="lines",
                 fill="toself",
-                fillcolor=robot_color,  # Ensure matching color with path
+                fillcolor=robot_color,
                 line=dict(color=robot_color, width=1),
                 name=f"{robot_id}",
-                text=robot_id,
+                text=f"{robot_id} @ {timestamp}",
                 hoverinfo="text"
-            )
-            self.fig.add_trace(self.robot_shapes[robot_id])
+            ))
         
-        # 3. Create FRAMES for animation
-        frames = []
-        for frame_idx, timestamp in tqdm(enumerate(self.time_stamps), total=len(self.time_stamps), ascii="░▒█", desc="Processing frames", unit=" frames"):
-            frame_data = []
-            
-            # Follow the same ordering in each frame: pointclouds first, then paths, then robots
-            # First add all pointcloud traces for this frame
-            for robot_id, data in self.robot_data.items():
-                # Update pointcloud
-                pointclouds = data["pointclouds"][frame_idx]
-                pointcloud_x = [p["x"] for p in pointclouds]
-                pointcloud_z = [p["z"] for p in pointclouds]
-                pointcloud_classes = [p.get("class", "unknown") for p in pointclouds]
-                colors = self.map_classes_to_colors(pointcloud_classes)
-                
-                frame_data.append(
-                    go.Scatter(
-                        x=pointcloud_x,
-                        y=pointcloud_z,
-                        mode="markers",
-                        marker=dict(
-                            color=colors,
-                            size=4,
-                            opacity=0.7
-                        ),
-                        name=f"{robot_id} (LiDAR)",
-                        showlegend=False
-                    )
-                )
-            
-            # Add all path traces
-            for robot_id, data in self.robot_data.items():
-                robot_color = self.robot_colors[robot_id]
-                
-                # Collect all positions up to current frame for path
-                path_x = [pos[0] for pos in data["robot_positions"][:frame_idx+1]]
-                path_y = [pos[1] for pos in data["robot_positions"][:frame_idx+1]]
-                
-                frame_data.append(
-                    go.Scatter(
-                        x=path_x,
-                        y=path_y,
-                        mode="lines",
-                        line=dict(color=robot_color, width=2),
-                        name=f"{robot_id} (Path)",
-                        showlegend=False
-                    )
-                )
-            
-            # Finally add all robot shapes
-            for robot_id, data in self.robot_data.items():
-                robot_color = self.robot_colors[robot_id]
-                
-                # Robot position and orientation for this frame
-                robot_pos = data["robot_positions"][frame_idx]
-                robot_orient = data["robot_orientations"][frame_idx]
-                
-                # Update robot shape
-                shape_x, shape_y = self.create_robot_shape(
-                    robot_pos[0], robot_pos[1], robot_orient, robot_id
-                )
-                
-                frame_data.append(
-                    go.Scatter(
-                        x=shape_x,
-                        y=shape_y,
-                        mode="lines",
-                        fill="toself",
-                        fillcolor=robot_color,  # Use same color as the path
-                        line=dict(color=robot_color, width=1),
-                        name=f"{robot_id}",
-                        text=f"{robot_id} @ {timestamp}",
-                        hoverinfo="text"
-                    )
-                )
-            
-            # Create frame with all data - ENSURE FIXED AXES in every frame
-            frame = go.Frame(
-                data=frame_data,
-                name=str(f"{timestamp:.2f}"),
-                layout=go.Layout(
-                    xaxis=dict(range=x_axis_range, fixedrange=True),  # Add fixedrange=True
-                    yaxis=dict(range=z_axis_range, fixedrange=True)   # Add fixedrange=True
-                )
-            )
-            frames.append(frame)
+        # Add legend for semantic classes
+        for class_name, color in self.class_color_map.items():
+            fig.add_trace(go.Scatter(
+                x=[None], 
+                y=[None],
+                mode='markers',
+                marker=dict(
+                    size=10,
+                    color=color
+                ),
+                name=f"{class_name}",
+                showlegend=True
+            ))
         
-        # 4. Add frames to figure
-        self.fig.frames = frames
-
-        self.add_pointcloud_legend()
-        
-        # 5. Add animation controls
-        set_frame_dur = self.time_step * 1000
-            
-
-        self.fig.update_layout(
-            title=f"AMR Movement with LiDAR Data (Unity Coordinates, Frame rate = {1000/self.frame_step:.1f} FPS)",
-            # Buttons for play/pause
-            updatemenus=[{
-                'type': 'buttons',
-                'buttons': [
-                    {
-                        'args': [None, {'frame': {'duration': set_frame_dur, 'redraw': True}, 'fromcurrent': True, 'mode': 'immediate', 'transition': {'duration': 0}}],
-                        'args2': [[None], {'frame': {'duration': 0, 'redraw': False}, 'mode': 'immediate', 'transition': {'duration': 0}}],
-
-                        'label': 'Play/Pause',
-                        'method': 'animate'
-                    }
-                ],
-                'direction': 'left',
-                'pad': {'r': 10, 't': 10},
-                'showactive': False,
-                'type': 'buttons',
-                'x': 0.1,
-                'xanchor': 'right',
-                'y': 0,
-                'yanchor': 'top'
-            }],
-            
-            # Timeline slider to move through the frames
-            sliders=[{
-                'active': 0,
-                'steps': [{
-                    'args': [[f.name], {'frame': {'duration': self.frame_step, 'redraw': True}, 'mode': 'immediate'}],
-                    'label': f.name,
-                    'method': 'animate'
-                } for f in frames],
-                'x': 0.1,
-                'xanchor': 'left',
-                'y': 0,
-                'yanchor': 'top'
-            },
-            # Playback speed control slider
-            {
-                'active': 0,
-                'pad': {'b': 10},
-                'currentvalue': {
-                    'font': {'size': 16},
-                    'prefix': 'Speed: ',
-                    'visible': True,
-                    'xanchor': 'center'
-                },
-                'steps': [
-                    {
-                        'args': [None, {'frame': {'duration': value, 'redraw': True}, 'mode': 'immediate'}],
-                        'label': f'{((1000*self.time_step)/value):.2f}x',
-                        'method': 'animate'
-                    } for value in np.array([1000, 500, 333.33, 250, 200, 125, 100])  # Adjust slider step values
-                ],
-                'x': 0.1,  # Position the speed slider on the right side
-                'xanchor': 'left',  # Anchor the slider's left side to the x position
-                'y': -0.2,  # Position the speed slider vertically (adjust this value for positioning)
-                'yanchor': 'top',  # Anchor the slider's bottom side to the y position
-            }]
-        )
-
-        
-        # 6. Set up plot for Unity coordinates with fixed axis ranges
-        self.fig.update_layout(
-            title=f"AMR Movement with LiDAR Data (Unity Coordinates, Frame step = {self.frame_step})",
+        # Set up layout with fixed axis ranges
+        fig.update_layout(
+            title=f"AMR Movement with LiDAR Data (Unity Coordinates, Frame rate = {1000/frame_duration:.1f} FPS)",
             xaxis=dict(
                 title="X Position (Unity)",
-                range=x_axis_range,  # Fixed range 
+                range=self.x_axis_range,
                 scaleanchor="y",
                 scaleratio=1,
-                fixedrange=True,     # prevent zoom
-                constrain="domain"   # maintain aspect ratio
+                fixedrange=True,
+                constrain="domain"
             ),
             yaxis=dict(
-                title="Z Position (Unity)",  # Z is up in Unity
-                range=z_axis_range,  
-                fixedrange=True,     
-                constrain="domain"  
+                title="Z Position (Unity)",
+                range=self.z_axis_range,
+                fixedrange=True,
+                constrain="domain"
             ),
             legend=dict(
                 x=1.05,
@@ -414,17 +256,133 @@ class Visualizer:
             plot_bgcolor='rgba(240, 240, 240, 0.8)',
             height=800,
             width=1000,
-            scene_aspectmode='data',  # Preserve aspect ratio
-            dragmode=False            # Disable dragging to prevent repositioning
+            scene_aspectmode='data',
+            dragmode=False
         )
-
-    def save_animation(self, savepath):
-        """Save the animation to an HTML file."""
-        os.makedirs(savepath, exist_ok=True)
-        filepath = os.path.join(savepath, "AMR_Animation_with_LiDAR_Tracking.html")
-        self.fig.write_html(filepath, auto_play=False)
-        print(f"\n✅ Animation saved to {filepath}")
-
+        
+        return fig
+    
+    def setup_layout(self):
+        """Set up the Dash app layout."""
+        # Create marks for frame slider
+        frame_marks = {i: {"label": f"{self.time_stamps[i]:.2f}"} 
+                      for i in range(0, len(self.time_stamps), max(1, len(self.time_stamps) // 10))}
+        
+        # Create marks for speed slider
+        speed_marks = {i: {"label": f"{(1000*self.time_step/self.speed_values[i]):.2f}x"} 
+                      for i in range(len(self.speed_values))}
+        
+        self.app.layout = html.Div([
+            html.H1("AMR Movement with LiDAR Data Visualization"),
+            
+            # Main graph
+            dcc.Graph(id='amr-graph', style={'height': '800px'}),
+            
+            html.Div([
+                # Frame slider
+                html.Div([
+                    html.Label("Timeline:"),
+                    dcc.Slider(
+                        id='frame-slider',
+                        min=0,
+                        max=len(self.time_stamps) - 1,
+                        value=0,
+                        marks=frame_marks,
+                        step=1
+                    )
+                ], style={'width': '100%', 'padding': '20px'}),
+                
+                # Speed slider
+                html.Div([
+                    html.Label("Playback Speed:"),
+                    dcc.Slider(
+                        id='speed-slider',
+                        min=0,
+                        max=len(self.speed_values) - 1,
+                        value=0,  # Default to first speed
+                        marks=speed_marks,
+                        step=None
+                    )
+                ], style={'width': '100%', 'padding': '20px'}),
+                
+                # Play/pause button
+                html.Div([
+                    html.Button('Play', id='play-button', n_clicks=0)
+                ], style={'padding': '20px'})
+            ]),
+            
+            # Store current state
+            dcc.Store(id='playing-state', data={'is_playing': False}),
+            
+            # Interval component for animation
+            dcc.Interval(
+                id='animation-interval',
+                interval=self.time_step * 1000,  # in milliseconds
+                n_intervals=0,
+                disabled=True
+            )
+        ])
+    
+    def setup_callbacks(self):
+        """Set up the Dash app callbacks."""
+        # Callback to update graph based on frame slider and speed
+        @self.app.callback(
+            Output('amr-graph', 'figure'),
+            [Input('frame-slider', 'value'),
+             Input('speed-slider', 'value')]
+        )
+        def update_graph(frame_idx, speed_idx):
+            # Default speed index to 0 if None
+            speed_idx = 0 if speed_idx is None else speed_idx
+            frame_duration = self.speed_values[speed_idx]
+            return self.create_figure(frame_idx, frame_duration)
+        
+        # Callback to handle play/pause
+        @self.app.callback(
+            [Output('animation-interval', 'disabled'),
+             Output('animation-interval', 'interval'),
+             Output('play-button', 'children'),
+             Output('playing-state', 'data')],
+            [Input('play-button', 'n_clicks'),
+             Input('speed-slider', 'value')],
+            [State('playing-state', 'data')]
+        )
+        def toggle_animation(n_clicks, speed_idx, playing_state):
+            # Determine if we should be playing based on button clicks
+            is_playing = not playing_state['is_playing'] if n_clicks > 0 else playing_state['is_playing']
+            
+            # Default speed index to 0 if None
+            speed_idx = 0 if speed_idx is None else speed_idx
+            frame_duration = self.speed_values[speed_idx]
+            
+            # Update interval based on frame duration
+            interval = frame_duration
+            
+            # Update button text
+            button_text = 'Pause' if is_playing else 'Play'
+            
+            # Update playing state
+            new_state = {'is_playing': is_playing}
+            
+            return not is_playing, interval, button_text, new_state
+        
+        # Callback to update frame based on interval
+        @self.app.callback(
+            Output('frame-slider', 'value'),
+            [Input('animation-interval', 'n_intervals')],
+            [State('frame-slider', 'value'),
+             State('playing-state', 'data')]
+        )
+        def update_frame(n_intervals, current_frame, playing_state):
+            if not playing_state['is_playing']:
+                return current_frame
+                
+            next_frame = (current_frame + 1) % len(self.time_stamps)
+            return next_frame
+    
+    def run_server(self, debug=True, port=8050):
+        """Run the Dash app server."""
+        self.app.run(debug=debug, port=port)
 
 def transform_lidar_points(
     ranges: np.ndarray,
