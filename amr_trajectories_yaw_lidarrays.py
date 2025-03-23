@@ -16,9 +16,9 @@ def main():
     path_to_sem_def = os.path.join(path_to_dataset, "class_definition_semantic_segmentation.json")
       
     # Processing parameters
-    sample_size = 1800
+    sample_size = 1000
     frame_step = 10
-    time_step = 0.033333333*frame_step
+    time_step = 0.033333335*frame_step
     playback_rate = 1
 
     # Load and process data
@@ -333,6 +333,8 @@ class Visualizer:
                 'buttons': [
                     {
                         'args': [None, {'frame': {'duration': set_frame_dur, 'redraw': True}, 'fromcurrent': True, 'mode': 'immediate', 'transition': {'duration': 0}}],
+                        'args2': [[None], {'frame': {'duration': 0, 'redraw': False}, 'mode': 'immediate', 'transition': {'duration': 0}}],
+
                         'label': 'Play/Pause',
                         'method': 'animate'
                     }
@@ -365,7 +367,7 @@ class Visualizer:
                 'active': 0,
                 'pad': {'b': 10},
                 'currentvalue': {
-                    'font': {'size': 20},
+                    'font': {'size': 16},
                     'prefix': 'Speed: ',
                     'visible': True,
                     'xanchor': 'center'
@@ -373,14 +375,14 @@ class Visualizer:
                 'steps': [
                     {
                         'args': [None, {'frame': {'duration': value, 'redraw': True}, 'mode': 'immediate'}],
-                        'label': f'{int((1000*self.time_step)/value)}x',
+                        'label': f'{((1000*self.time_step)/value):.2f}x',
                         'method': 'animate'
                     } for value in np.array([1000, 500, 333.33, 250, 200, 125, 100])  # Adjust slider step values
                 ],
-                'x': 0.85,  # Position the speed slider on the right side
+                'x': 0.1,  # Position the speed slider on the right side
                 'xanchor': 'left',  # Anchor the slider's left side to the x position
-                'y': 0.1,  # Position the speed slider vertically (adjust this value for positioning)
-                'yanchor': 'bottom',  # Anchor the slider's bottom side to the y position
+                'y': -0.2,  # Position the speed slider vertically (adjust this value for positioning)
+                'yanchor': 'top',  # Anchor the slider's bottom side to the y position
             }]
         )
 
