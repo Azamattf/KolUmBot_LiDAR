@@ -69,14 +69,20 @@ def load_json_files(path_to_jsons, sample_size, frame_step):
                                 
     return data
 
+import numpy as np
+import cv2
+from scipy.spatial.transform import Rotation
+from tqdm import tqdm
+import os
+
 def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def, point_size=3):
-    """Create images with properly projected 3D LiDAR pointclouds accounting for height differences."""
+    """Create images with properly projected LiDAR points following perspective."""
     os.makedirs(os.path.join(save_path, "lidar_overlay"), exist_ok=True)
     
-    # Height constants (in meters)
-    CAMERA_HEIGHT = 0.12
+    # Sensor heights (in meters)
     LIDAR_HEIGHT = 0.14
-    VERTICAL_OFFSET = LIDAR_HEIGHT - CAMERA_HEIGHT  # 0.02m difference
+    CAMERA_HEIGHT = 0.12
+    HEIGHT_DIFFERENCE = LIDAR_HEIGHT - CAMERA_HEIGHT  # 0.02m
 
     # Step 1: Extract projection matrix
     global_proj_matrix = None
@@ -94,15 +100,28 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
     fx = global_proj_matrix[0]
     fy = global_proj_matrix[4]
     width, height = cameras[0].get("dimension", [1280, 720])
-    cx, cy = width/2, height/2
+    cx, cy = width / 2, height / 2
+    
+    # Calculate vertical and horizontal FOV
+    vertical_fov = 60  # Default Unity FOV (vertical)
+    aspect_ratio = width / height
+    horizontal_fov = 2 * np.arctan(np.tan(np.deg2rad(vertical_fov) / 2) * aspect_ratio)
+    
+    print(f"Horizontal FOV: {np.rad2deg(horizontal_fov):.2f} degrees")
+    
+    # Update focal lengths based on the vertical FOV (fx, fy)
+    f_x = 0.5 * width / np.tan(np.deg2rad(vertical_fov / 2))
+    f_y = 0.5 * height / np.tan(np.deg2rad(vertical_fov / 2))
     
     K = np.array([
-        [fx, 0, cx],
-        [0, fy, cy], 
+        [f_x, 0, cx],
+        [0, f_y, cy], 
         [0, 0, 1]
     ])
 
-    for frame_idx, frame_data in enumerate(tqdm(json_files, desc="Processing frames", unit = "frames")):
+    print(f"\nK Matrix: {K}")
+
+    for frame_idx, frame_data in enumerate(tqdm(json_files, desc="Processing frames")):
         cameras = [c for c in frame_data.get("captures", []) 
                   if c.get('@type', '').endswith('RGBCamera')]
         lidars = [l for l in frame_data.get("captures", []) 
@@ -133,7 +152,7 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
             cam_rot = np.array(camera["globalRotation"])  # Quaternion (x,y,z,w)
             R_cam = Rotation.from_quat([cam_rot[0], cam_rot[1], cam_rot[2], cam_rot[3]]).as_matrix()
             
-            # Process LiDAR points with proper 3D projection
+            # Process LiDAR points
             for lidar in lidars:
                 lidar_pos = np.array(lidar["globalPosition"])
                 lidar_rot = np.array(lidar["globalRotation"])
@@ -147,11 +166,11 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
                     if len(ranges) == 0:
                         continue
                     
-                    # Convert to 3D points in LIDAR frame with vertical offset
+                    # Convert to 3D points in horizontal plane (Y = height difference)
                     theta_rad = np.deg2rad(angles)
                     x_local = ranges * np.sin(theta_rad)
                     z_local = ranges * np.cos(theta_rad)
-                    y_local = np.full_like(ranges, VERTICAL_OFFSET)  # Constant height difference
+                    y_local = np.full_like(ranges, HEIGHT_DIFFERENCE)  # Constant height
                     
                     points_local = np.vstack((x_local, y_local, z_local)).T
                     
@@ -161,20 +180,20 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
                     # Transform to camera coordinates
                     points_cam = (R_cam.T @ (points_world - cam_pos).T).T
                     
-                    # Project to 2D image coordinates
+                    # Project to 2D image coordinates (this creates perspective effect)
                     points_2d = (K @ points_cam.T).T
                     points_2d = points_2d[:, :2] / points_2d[:, 2:]  # Perspective divide
                     
                     # Filter valid points
                     valid = (
-                        (points_2d[:, 0] >= 0) & (points_2d[:, 0] < width) &
-                        (points_2d[:, 1] >= 0) & (points_2d[:, 1] < height) &
+                        (points_2d[:, 0] >= 0) & (points_2d[:, 0] < width) & 
+                        (points_2d[:, 1] >= 0) & (points_2d[:, 1] < height) & 
                         (points_cam[:, 2] > 0)  # Z > 0 (in front of camera)
                     )
                     points_2d = points_2d[valid]
                     classes = np.array(classes)[valid]
                     
-                    # Draw points
+                    # Draw points (they should now follow perspective)
                     for (x, y), cls in zip(points_2d, classes):
                         color = class_def.get(cls, 'rgba(255,0,0,1)')
                         color_rgb = tuple(int(x) for x in color.split('(')[1].split(')')[0].split(',')[:3])
