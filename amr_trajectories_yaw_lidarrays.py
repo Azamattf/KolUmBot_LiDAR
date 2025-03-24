@@ -17,7 +17,7 @@ def main():
     # Processing parameters
     sample_size = ""   # upper sampling bound, set to "" for all frames
     frame_step = 10
-    time_step = 0.033333335*frame_step
+    time_step = 0.0333333351*frame_step
     
     # Load and process data
     json_files = load_json_files(path_to_images, sample_size, frame_step)
