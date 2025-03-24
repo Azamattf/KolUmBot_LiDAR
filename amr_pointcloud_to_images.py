@@ -17,13 +17,13 @@ def main():
     path_to_sem_def = os.path.join(path_to_dataset, "semantic_segmentation_definition.json")
       
     # Processing parameters
-    sample_size = 500   # upper sampling bound, set to "" for all frames
+    sample_size = 1000   # upper sampling bound, set to "" for all frames
     frame_step = 10
     time_step = 0.0333333351*frame_step
     
     # Load and process data
     json_files = load_json_files(path_to_images, sample_size, frame_step)
-    robot_data = read_data_with_offset(json_files, save_path)
+    #robot_data = read_data_with_offset(json_files, save_path)
     class_def = load_class_definitions(path_to_sem_def)
 
     # Process each frame to create pointcloud-overlaid images
@@ -270,7 +270,7 @@ def calculate_bounds(robot_data):
     return [x_min, x_max], [z_min, z_max]
 
 def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def, point_size=3):
-    """Create images with LiDAR pointclouds overlaid on camera views."""
+    """Create images with LiDAR pointclouds overlaid on camera views, including timestamp and legend."""
     os.makedirs(os.path.join(save_path, "lidar_overlay"), exist_ok=True)
     
     # Step 1: Extract the projection matrix from the FIRST camera
@@ -280,27 +280,24 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
                   if c.get('@type', '').endswith('RGBCamera')]
         if cameras:
             global_proj_matrix = cameras[0].get("matrix")
-            break  # Use the first camera's matrix as reference
+            break
     
     if global_proj_matrix is None:
-        raise ValueError("No camera found in JSON files to extract projection matrix!")
+        raise ValueError(f"No camera found in JSON files to extract projection matrix!")
     
-    # Step 2: Build the intrinsic matrix (K) from the global_proj_matrix
-    fx = global_proj_matrix[0]  # Focal length x
-    fy = global_proj_matrix[4]  # Focal length y
-    width, height = cameras[0].get("dimension", [1280, 720])  # Default resolution
-    cx, cy = width / 2, height / 2  # Principal point (assumed centered)
+    # Step 2: Build the intrinsic matrix (K)
+    fx = global_proj_matrix[0]
+    fy = global_proj_matrix[4]
+    width, height = cameras[0].get("dimension", [1280, 720])
+    cx, cy = width / 2, height / 2
     
     K = np.array([
         [fx, 0, cx],
         [0, fy, cy],
-        [0, 0,  1]
+        [0, 0, 1]
     ])
-    
-    print(f"Using constant projection matrix for all cameras:")
-    print(f"  fx={fx}, fy={fy}, cx={cx}, cy={cy}")
 
-    # Step 3: Process all frames with the SAME K matrix
+    # Step 3: Process all frames
     for frame_idx, frame_data in enumerate(tqdm(json_files, desc="Creating overlay images")):
         cameras = [c for c in frame_data.get("captures", []) 
                   if c.get('@type', '').endswith('RGBCamera')]
@@ -308,14 +305,9 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
                  if l.get('@type') == 'type.custom/solo.2DLidar']
         
         if not cameras or not lidars:
-            continue  # Skip frames missing either sensor
+            continue
 
         for camera in cameras:
-            # Verify the camera's matrix matches the global one (optional)
-            if "matrix" in camera and not np.allclose(camera["matrix"], global_proj_matrix, atol=1e-3):
-                print(f"Warning: Camera {camera['id']} has a different projection matrix!")
-            
-            # Load image and process LiDAR points (using the global K)
             img_filename = camera.get("filename", "")
             if not img_filename:
                 continue
@@ -325,12 +317,47 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
             if img is None:
                 continue
             
+            # Create overlay image
             overlay = img.copy()
+            
+            # Get timestamp and format it
+            timestamp = frame_data.get("timestamp", 0)
+            readable_time = f"Time: {timestamp:.2f}s"
+            
+            # Add timestamp to image (top-left corner)
+            cv2.putText(overlay, readable_time, (20, 40), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+            
+            # Prepare legend data
+            unique_classes = set()
+            for lidar in lidars:
+                for annot in lidar.get("annotations", []):
+                    classes = annot.get("object_classes", [])
+                    unique_classes.update(classes)
+            
+            # Add legend (top-right corner)
+            legend_x = width - 250
+            legend_y = 40
+            for i, cls in enumerate(sorted(unique_classes)):
+                color = class_def.get(cls, 'rgba(255,0,0,1)')
+                color_rgb = tuple(int(x) for x in color.split('(')[1].split(')')[0].split(',')[:3])
+                
+                # Convert all coordinates to integers
+                pt1 = (int(legend_x), int(legend_y + i*30 - 15))
+                pt2 = (int(legend_x + 20), int(legend_y + i*30 + 5))
+                
+                # Draw legend color box
+                cv2.rectangle(overlay, pt1, pt2, color_rgb, -1)
+                
+                # Draw class label
+                cv2.putText(overlay, cls, (int(legend_x + 30), int(legend_y + i*30)), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+
+            # Process LiDAR points (same as before)
             cam_pos = np.array(camera["globalPosition"])
-            cam_rot = np.array(camera["globalRotation"])  # Quaternion (x,y,z,w)
+            cam_rot = np.array(camera["globalRotation"])
             R_cam = Rotation.from_quat([cam_rot[0], cam_rot[1], cam_rot[2], cam_rot[3]]).as_matrix()
             
-            # Process all LiDAR points
             for lidar in lidars:
                 lidar_pos = np.array(lidar["globalPosition"])
                 lidar_rot = np.array(lidar["globalRotation"])
@@ -344,18 +371,14 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
                     if len(ranges) == 0:
                         continue
                     
-                    # Convert to 3D world coordinates
                     x_local = ranges * np.sin(np.deg2rad(angles))
                     z_local = ranges * np.cos(np.deg2rad(angles))
                     points_local = np.vstack((x_local, np.zeros_like(x_local), z_local)).T
                     points_world = (R_lidar @ points_local.T).T + lidar_pos
-                    
-                    # Transform to camera coordinates (using global K)
                     points_cam = (R_cam.T @ (points_world - cam_pos).T).T
                     points_2d = (K @ points_cam.T).T
-                    points_2d = points_2d[:, :2] / points_2d[:, 2:]  # Perspective divide
+                    points_2d = points_2d[:, :2] / points_2d[:, 2:]
                     
-                    # Filter valid points
                     valid = (
                         (points_2d[:, 0] >= 0) & (points_2d[:, 0] < width) &
                         (points_2d[:, 1] >= 0) & (points_2d[:, 1] < height) &
@@ -364,16 +387,16 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
                     points_2d = points_2d[valid]
                     classes = np.array(classes)[valid]
                     
-                    # Draw points
                     for (x, y), cls in zip(points_2d, classes):
                         color = class_def.get(cls, 'rgba(255,0,0,1)')
                         color_rgb = tuple(int(x) for x in color.split('(')[1].split(')')[0].split(',')[:3])
                         cv2.circle(overlay, (int(x), int(y)), point_size, color_rgb, -1)
             
-            # Save overlay
+            # Final output with transparency
             output = cv2.addWeighted(overlay, 0.7, img, 0.3, 0)
             output_path = os.path.join(save_path, "lidar_overlay", f"lidar_overlay_{os.path.splitext(img_filename)[0]}.png")
             cv2.imwrite(output_path, output)
+        print("\n✅ Image overlay complete!")
 
 if __name__ == "__main__":
     main()
