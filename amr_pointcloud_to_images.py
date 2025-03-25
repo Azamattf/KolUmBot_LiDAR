@@ -166,11 +166,11 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
                     if len(ranges) == 0:
                         continue
                     
-                    # Convert to 3D points in horizontal plane (Y = height difference)
+                    # Convert to 3D points in horizontal plane (Y = lidar height)
                     theta_rad = np.deg2rad(angles)
-                    x_local = ranges * np.sin(theta_rad)
-                    z_local = ranges * np.cos(theta_rad)
-                    y_local = np.full_like(ranges, HEIGHT_DIFFERENCE)  # Constant height
+                    x_local = ranges * np.cos(theta_rad)
+                    z_local = ranges * np.sin(theta_rad)
+                    y_local = np.full_like(ranges, LIDAR_HEIGHT)  # Constant height
                     
                     points_local = np.vstack((x_local, y_local, z_local)).T
                     
