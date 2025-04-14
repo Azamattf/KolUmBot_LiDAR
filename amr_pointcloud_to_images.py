@@ -17,7 +17,7 @@ def main():
     path_to_sem_def = os.path.join(path_to_dataset, "semantic_segmentation_definition.json")
       
     # Processing parameters
-    sample_size = 100   # upper sampling bound, set to "" for all frames
+    sample_size = 1000  # upper sampling bound, set to "" for all frames
     frame_step = 10
     time_step = 0.0333333351*frame_step
     
@@ -69,11 +69,6 @@ def load_json_files(path_to_jsons, sample_size, frame_step):
                                 
     return data
 
-import numpy as np
-import cv2
-from scipy.spatial.transform import Rotation
-from tqdm import tqdm
-import os
 
 def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def, point_size=3):
     """Create images with properly projected LiDAR points following perspective."""
@@ -82,36 +77,37 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
     # Sensor heights (in meters)
     LIDAR_HEIGHT = 0.14
     CAMERA_HEIGHT = 0.12
-    HEIGHT_DIFFERENCE = LIDAR_HEIGHT - CAMERA_HEIGHT  # 0.02m
 
-    # Step 1: Extract projection matrix
+    # Step 1: Extract camera information
     global_proj_matrix = None
+    width, height = 1280, 720  # Default
+    
     for frame_data in json_files:
         cameras = [c for c in frame_data.get("captures", []) 
                  if c.get('@type', '').endswith('RGBCamera')]
         if cameras:
             global_proj_matrix = cameras[0].get("matrix")
+            width, height = cameras[0].get("dimension", [1280, 720])
             break
     
     if global_proj_matrix is None:
         raise ValueError("No camera found in JSON files!")
 
-    # Step 2: Build camera matrix
-    fx = global_proj_matrix[0]
-    fy = global_proj_matrix[4]
-    width, height = cameras[0].get("dimension", [1280, 720])
-    cx, cy = width / 2, height / 2
-    
-    # Calculate vertical and horizontal FOV
-    vertical_fov = 60  # Default Unity FOV (vertical)
+    # Step 2: Using vertical FOV = 60 degrees to build camera matrix
+    vertical_fov = 60  # in degrees
     aspect_ratio = width / height
     horizontal_fov = 2 * np.arctan(np.tan(np.deg2rad(vertical_fov) / 2) * aspect_ratio)
     
+    print(f"Vertical FOV: {vertical_fov:.2f} degrees")
     print(f"Horizontal FOV: {np.rad2deg(horizontal_fov):.2f} degrees")
     
-    # Update focal lengths based on the vertical FOV (fx, fy)
-    f_x = 0.5 * width / np.tan(np.deg2rad(vertical_fov / 2))
-    f_y = 0.5 * height / np.tan(np.deg2rad(vertical_fov / 2))
+    # Calculate focal lengths based on the vertical FOV
+    f_y = height / (2 * np.tan(np.deg2rad(vertical_fov) / 2))
+    f_x = f_y  # For square pixels, focal length is the same in x and y when measured in pixels
+    
+    # Principal point (usually the center of the image)
+    cx = width / 2
+    cy = height / 2
     
     K = np.array([
         [f_x, 0, cx],
@@ -119,12 +115,12 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
         [0, 0, 1]
     ])
 
-    print(f"\nK Matrix: {K}")
+    print(f"\nCamera Intrinsic Matrix K:\n{K}")
 
     for frame_idx, frame_data in enumerate(tqdm(json_files, desc="Processing frames")):
         cameras = [c for c in frame_data.get("captures", []) 
                   if c.get('@type', '').endswith('RGBCamera')]
-        lidars = [l for l in frame_data.get("captures", []) 
+        lidars = [l for l in frame_data.get("captures", [])
                  if l.get('@type') == 'type.custom/solo.2DLidar']
         
         if not cameras or not lidars:
@@ -222,7 +218,7 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
             output = cv2.addWeighted(overlay, 0.7, img, 0.3, 0)
             output_path = os.path.join(save_path, "lidar_overlay", f"lidar_overlay_{os.path.splitext(img_filename)[0]}.png")
             cv2.imwrite(output_path, output)
-    print("\n✅ Image overlay complete!")
+    print("\nImage overlay complete!")
 
 if __name__ == "__main__":
     main()
