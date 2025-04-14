@@ -69,14 +69,13 @@ def load_json_files(path_to_jsons, sample_size, frame_step):
                                 
     return data
 
-
 def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def, point_size=3):
     """Create images with properly projected LiDAR points following perspective."""
     os.makedirs(os.path.join(save_path, "lidar_overlay"), exist_ok=True)
     
     # Sensor heights (in meters)
     LIDAR_HEIGHT = 0.14
-    CAMERA_HEIGHT = 0.12
+    """ CAMERA_HEIGHT = 0.12; this is not needed since globalPosition data already contains this information"""
 
     # Step 1: Extract camera information
     global_proj_matrix = None
@@ -111,12 +110,13 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
     
     K = np.array([
         [f_x, 0, cx],
-        [0, f_y, cy], 
+        [0, -f_y, cy], 
         [0, 0, 1]
     ])
 
     print(f"\nCamera Intrinsic Matrix K:\n{K}")
 
+    # Step3: Frame processing
     for frame_idx, frame_data in enumerate(tqdm(json_files, desc="Processing frames")):
         cameras = [c for c in frame_data.get("captures", []) 
                   if c.get('@type', '').endswith('RGBCamera')]
@@ -164,8 +164,8 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
                     
                     # Convert to 3D points in horizontal plane (Y = lidar height)
                     theta_rad = np.deg2rad(angles)
-                    x_local = ranges * np.cos(theta_rad)
-                    z_local = ranges * np.sin(theta_rad)
+                    x_local = ranges * np.sin(theta_rad)
+                    z_local = ranges * np.cos(theta_rad)
                     y_local = np.full_like(ranges, LIDAR_HEIGHT)  # Constant height
                     
                     points_local = np.vstack((x_local, y_local, z_local)).T
@@ -219,6 +219,8 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
             output_path = os.path.join(save_path, "lidar_overlay", f"lidar_overlay_{os.path.splitext(img_filename)[0]}.png")
             cv2.imwrite(output_path, output)
     print("\nImage overlay complete!")
+
+
 
 if __name__ == "__main__":
     main()
