@@ -15,19 +15,23 @@ def main():
     path_to_images = os.path.join(path_to_dataset, "sequence.0")
     save_path = os.path.join(path_to_dataset, "Export")
     path_to_sem_def = os.path.join(path_to_dataset, "semantic_segmentation_definition.json")
+    lidar_overlay_folder_name = "lidar_overlay"
       
     # Processing parameters
-    sample_size = 1000  # upper sampling bound, set to "" for all frames
+    sample_size = "3000"  # upper sampling bound, set to "" for all frames
     frame_step = 10
     time_step = 0.0333333351*frame_step
     
     # Load and process data
     json_files = load_json_files(path_to_images, sample_size, frame_step)
-    #robot_data = read_data_with_offset(json_files, save_path)
     class_def = load_class_definitions(path_to_sem_def)
-
+    
     # Process each frame to create pointcloud-overlaid images
-    create_lidar_overlay_images(json_files, save_path, path_to_images, class_def)
+    create_lidar_overlay_images(json_files, save_path, lidar_overlay_folder_name, path_to_images, class_def)
+
+    # Create overlay videos for each AMR
+    #create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"))
+
 
 def load_class_definitions(filepath):
     with open(filepath, 'r') as f:
@@ -69,7 +73,7 @@ def load_json_files(path_to_jsons, sample_size, frame_step):
                                 
     return data
 
-def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def, point_size=3):
+def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path_to_images, class_def, point_size=3):
     """Create images with properly projected LiDAR points following perspective."""
     os.makedirs(os.path.join(save_path, "lidar_overlay"), exist_ok=True)
     
@@ -130,7 +134,7 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
             img_filename = camera.get("filename", "")
             if not img_filename:
                 continue
-            
+                        
             img_path = os.path.join(path_to_images, img_filename)
             img = cv2.imread(img_path)
             if img is None:
@@ -142,7 +146,10 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
             timestamp = frame_data.get("timestamp", 0)
             cv2.putText(overlay, f"Time: {timestamp:.2f}s", (20, 40), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2, cv2.LINE_AA)
+            cv2.putText(overlay, f"AMR: {timestamp:.2f}s", (20, 65), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2, cv2.LINE_AA)
             
+
             # Get camera pose (3D)
             cam_pos = np.array(camera["globalPosition"])
             cam_rot = np.array(camera["globalRotation"])  # Quaternion (x,y,z,w)
@@ -216,11 +223,42 @@ def create_lidar_overlay_images(json_files, save_path, path_to_images, class_def
             
             # Final output
             output = cv2.addWeighted(overlay, 0.7, img, 0.3, 0)
-            output_path = os.path.join(save_path, "lidar_overlay", f"lidar_overlay_{os.path.splitext(img_filename)[0]}.png")
+            output_path = os.path.join(save_path, overlay_folder_name, f"lidar_overlay_{os.path.splitext(img_filename)[0]}.png")
             cv2.imwrite(output_path, output)
     print("\nImage overlay complete!")
 
+"""
+def create_videos_per_amr(image_folder, output_folder, fps=30):
+    os.makedirs(output_folder, exist_ok=True)
+    amr_groups = defaultdict(list)
 
+    # Group images by AMR prefix (assuming format: "amr1_frame001.png", etc.)
+    for filename in os.listdir(image_folder):
+        if filename.endswith(".png"):
+            prefix = filename.split('_')[0]  # Example: 'amr1'
+            amr_groups[prefix].append(filename)
+
+    # Create video for each AMR
+    for amr_id, files in amr_groups.items():
+        files = natsorted(files)
+        if not files:
+            continue
+
+        first_image_path = os.path.join(image_folder, files[0])
+        frame = cv2.imread(first_image_path)
+        height, width, _ = frame.shape
+
+        video_path = os.path.join(output_folder, f"{amr_id}_lidar_overlay.mp4")
+        out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+
+        print(f"Creating video for {amr_id} with {len(files)} frames...")
+        for fname in tqdm(files, desc=f"Writing {amr_id}"):
+            img = cv2.imread(os.path.join(image_folder, fname))
+            out.write(img)
+
+        out.release()
+        print(f"Saved: {video_path}")
+"""
 
 if __name__ == "__main__":
     main()
