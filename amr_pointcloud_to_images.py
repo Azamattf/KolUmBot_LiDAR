@@ -18,7 +18,7 @@ def main():
     lidar_overlay_folder_name = "lidar_overlay"
       
     # Processing parameters
-    sample_size = "3000"  # upper sampling bound, set to "" for all frames
+    sample_size = 1000  # upper sampling bound, set to "" for all frames
     frame_step = 10
     time_step = 0.0333333351*frame_step
     
@@ -30,7 +30,7 @@ def main():
     create_lidar_overlay_images(json_files, save_path, lidar_overlay_folder_name, path_to_images, class_def)
 
     # Create overlay videos for each AMR
-    #create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"))
+    create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"), speed_factors=[1.0, 2.0])
 
 
 def load_class_definitions(filepath):
@@ -121,7 +121,7 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
     print(f"\nCamera Intrinsic Matrix K:\n{K}")
 
     # Step3: Frame processing
-    for frame_idx, frame_data in enumerate(tqdm(json_files, desc="Processing frames")):
+    for frame_idx, frame_data in enumerate(tqdm(json_files, desc="Processing frames", unit="frame")):
         cameras = [c for c in frame_data.get("captures", []) 
                   if c.get('@type', '').endswith('RGBCamera')]
         lidars = [l for l in frame_data.get("captures", [])
@@ -131,6 +131,10 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
             continue
 
         for camera in cameras:
+        
+            camera_id = camera.get("id", "")
+            amr_id = f"AMR_{camera_id.split("_")[1]}"
+            
             img_filename = camera.get("filename", "")
             if not img_filename:
                 continue
@@ -146,7 +150,7 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
             timestamp = frame_data.get("timestamp", 0)
             cv2.putText(overlay, f"Time: {timestamp:.2f}s", (20, 40), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2, cv2.LINE_AA)
-            cv2.putText(overlay, f"AMR: {timestamp:.2f}s", (20, 65), 
+            cv2.putText(overlay, f"AMR: {amr_id}", (20, 70), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2, cv2.LINE_AA)
             
 
@@ -227,38 +231,79 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
             cv2.imwrite(output_path, output)
     print("\nImage overlay complete!")
 
-"""
-def create_videos_per_amr(image_folder, output_folder, fps=30):
+def create_videos_per_amr(image_folder, output_folder, fps=30, speed_factors=[1.0, 1.25, 1.5, 2.0]):
+    """Create videos at different playback speeds for each AMR.
+    
+    Args:
+        image_folder: Path to folder containing overlay images
+        output_folder: Path to save output videos
+        fps: Base frames per second
+        speed_factors: List of playback speed multipliers (1x, 1.25x, etc.)
+    """
     os.makedirs(output_folder, exist_ok=True)
     amr_groups = defaultdict(list)
 
-    # Group images by AMR prefix (assuming format: "amr1_frame001.png", etc.)
+    # Group images by AMR ID
     for filename in os.listdir(image_folder):
-        if filename.endswith(".png"):
-            prefix = filename.split('_')[0]  # Example: 'amr1'
-            amr_groups[prefix].append(filename)
+        if not filename.endswith(".png") or not filename.startswith("lidar_overlay_"):
+            continue
+            
+        # Extract AMR ID from filename (format: lidar_overlay_step120.AMR_3_camera)
+        parts = filename.split('.')
+        if len(parts) < 2:
+            continue
+            
+        amr_part = parts[1]  # This should be "AMR_3_camera" in your example
+        if amr_part.startswith("AMR_"):
+            # Extract just the AMR ID (e.g., "AMR_3")
+            amr_id = amr_part.split('_')[:2]
+            amr_id = '_'.join(amr_id)  # Joins ["AMR", "3"] to "AMR_3"
+            amr_groups[amr_id].append(filename)
+        
+    print(f"Found {len(amr_groups)} AMRs: {list(amr_groups.keys())}")
 
-    # Create video for each AMR
+    # Create video for each AMR at different speeds
     for amr_id, files in amr_groups.items():
+        # Natural sort to ensure correct frame order
         files = natsorted(files)
         if not files:
             continue
 
+        print(f"Processing AMR '{amr_id}' with {len(files)} frames")
+        
         first_image_path = os.path.join(image_folder, files[0])
         frame = cv2.imread(first_image_path)
+        if frame is None:
+            print(f"Warning: Could not read image {first_image_path}")
+            continue
+            
         height, width, _ = frame.shape
 
-        video_path = os.path.join(output_folder, f"{amr_id}_lidar_overlay.mp4")
-        out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+        # Create videos at different speeds
+        for speed_factor in speed_factors:
+            # Adjust FPS for different playback speeds
+            effective_fps = fps * speed_factor
+            
+            video_path = os.path.join(output_folder, f"{amr_id}_speed_{speed_factor:.2f}x.mp4")
+            out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), effective_fps, (width, height))
 
-        print(f"Creating video for {amr_id} with {len(files)} frames...")
-        for fname in tqdm(files, desc=f"Writing {amr_id}"):
-            img = cv2.imread(os.path.join(image_folder, fname))
-            out.write(img)
+            print(f"Creating video for {amr_id} at {speed_factor:.2f}x speed with {len(files)} frames...")
+            
+            for fname in tqdm(files, desc=f"Writing {amr_id} at {speed_factor:.2f}x"):
+                img = cv2.imread(os.path.join(image_folder, fname))
+                if img is None:
+                    print(f"Warning: Could not read image {fname}")
+                    continue
+                    
+                # Add speed indicator to the frame
+                speed_text = f"Playback: {speed_factor:.2f}x"
+                cv2.putText(img, speed_text, (width - 200, height - 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                
+                out.write(img)
 
-        out.release()
-        print(f"Saved: {video_path}")
-"""
+            out.release()
+            print(f"Saved: {video_path}")
 
 if __name__ == "__main__":
     main()
