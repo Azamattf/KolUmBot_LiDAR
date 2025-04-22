@@ -18,8 +18,8 @@ def main():
     lidar_overlay_folder_name = "lidar_overlay"
       
     # Processing parameters
-    sample_size = 1000  # upper sampling bound, set to "" for all frames
-    frame_step = 10
+    sample_size = 500  # upper sampling bound, set to "" for all frames
+    frame_step = 3
     time_step = 0.0333333351*frame_step
     
     # Load and process data
@@ -30,7 +30,7 @@ def main():
     create_lidar_overlay_images(json_files, save_path, lidar_overlay_folder_name, path_to_images, class_def)
 
     # Create overlay videos for each AMR
-    create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"), speed_factors=[1.0, 2.0])
+    create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"), time_step, speed_factors=[1.0, 2.0])
 
 
 def load_class_definitions(filepath):
@@ -231,13 +231,9 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
             cv2.imwrite(output_path, output)
     print("\nImage overlay complete!")
 
-def create_videos_per_amr(image_folder, output_folder, fps=30, speed_factors=[1.0, 1.25, 1.5, 2.0]):
-    """Create videos at different playback speeds for each AMR.
-    
-    Args:
-        image_folder: Path to folder containing overlay images
-        output_folder: Path to save output videos
-        fps: Base frames per second
+def create_videos_per_amr(image_folder, output_folder, time_step, speed_factors=[1.0, 1.25, 1.5, 2.0]):
+    """    
+        time_step: Time between frames in seconds (from the main processing parameters)
         speed_factors: List of playback speed multipliers (1x, 1.25x, etc.)
     """
     os.makedirs(output_folder, exist_ok=True)
@@ -253,7 +249,7 @@ def create_videos_per_amr(image_folder, output_folder, fps=30, speed_factors=[1.
         if len(parts) < 2:
             continue
             
-        amr_part = parts[1]  # This should be "AMR_3_camera" in your example
+        amr_part = parts[1] 
         if amr_part.startswith("AMR_"):
             # Extract just the AMR ID (e.g., "AMR_3")
             amr_id = amr_part.split('_')[:2]
@@ -261,6 +257,9 @@ def create_videos_per_amr(image_folder, output_folder, fps=30, speed_factors=[1.
             amr_groups[amr_id].append(filename)
         
     print(f"Found {len(amr_groups)} AMRs: {list(amr_groups.keys())}")
+
+    # Calculate base frame rate based on time_step (real-time playback)
+    base_fps = (1.0*1/3) / time_step
 
     # Create video for each AMR at different speeds
     for amr_id, files in amr_groups.items():
@@ -282,7 +281,7 @@ def create_videos_per_amr(image_folder, output_folder, fps=30, speed_factors=[1.
         # Create videos at different speeds
         for speed_factor in speed_factors:
             # Adjust FPS for different playback speeds
-            effective_fps = fps * speed_factor
+            effective_fps = base_fps * speed_factor
             
             video_path = os.path.join(output_folder, f"{amr_id}_speed_{speed_factor:.2f}x.mp4")
             out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), effective_fps, (width, height))
@@ -303,7 +302,8 @@ def create_videos_per_amr(image_folder, output_folder, fps=30, speed_factors=[1.
                 out.write(img)
 
             out.release()
-            print(f"Saved: {video_path}")
+            print(f"\nSaved: {video_path}")
+    print(f"\n✅ Video generation for each AMR at {', '.join(f'{s}x' for s in speed_factors)} complete.")
 
 if __name__ == "__main__":
     main()
