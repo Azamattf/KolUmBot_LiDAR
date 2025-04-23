@@ -18,8 +18,9 @@ def main():
     lidar_overlay_folder_name = "lidar_overlay"
       
     # Processing parameters
-    sample_size = 2000  # upper sampling bound, set to "" for all frames
-    frame_step = 3
+    sample_size = 1000  # upper sampling bound, set to "" for all frames
+    frame_step = 10
+    time_step = 0.0333333351*frame_step
     
     # Load and process data
     json_files = load_json_files(path_to_images, sample_size, frame_step)
@@ -29,12 +30,8 @@ def main():
     create_lidar_overlay_images(json_files, save_path, lidar_overlay_folder_name, path_to_images, class_def)
 
     # Create overlay videos for each AMR
-    """
-    create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), 
-                          os.path.join(save_path, "videos"), 
-                          fps=3, 
-                          speed_factors=[1])
-    """ 
+    create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"), speed_factors=[1.0, 2.0])
+
 
 def load_class_definitions(filepath):
     with open(filepath, 'r') as f:
@@ -241,8 +238,13 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
         f.write("\n".join(timestamps))
     print("\nImage overlay complete!")
 
-def create_videos_per_amr(image_folder, output_folder, fps=10, speed_factors=[1.0, 1.5, 2.0]):
-    """    
+def create_videos_per_amr(image_folder, output_folder, fps=30, speed_factors=[1.0, 1.25, 1.5, 2.0]):
+    """Create videos at different playback speeds for each AMR.
+    
+    Args:
+        image_folder: Path to folder containing overlay images
+        output_folder: Path to save output videos
+        fps: Base frames per second
         speed_factors: List of playback speed multipliers (1x, 1.25x, etc.)
     """
     os.makedirs(output_folder, exist_ok=True)
@@ -258,7 +260,7 @@ def create_videos_per_amr(image_folder, output_folder, fps=10, speed_factors=[1.
         if len(parts) < 2:
             continue
             
-        amr_part = parts[1] 
+        amr_part = parts[1]  # This should be "AMR_3_camera" in your example
         if amr_part.startswith("AMR_"):
             # Extract just the AMR ID (e.g., "AMR_3")
             amr_id = amr_part.split('_')[:2]
@@ -308,8 +310,7 @@ def create_videos_per_amr(image_folder, output_folder, fps=10, speed_factors=[1.
                 out.write(img)
 
             out.release()
-            print(f"\nSaved: {video_path}")
-    print(f"\n✅ Video generation for each AMR at {', '.join(f'{s}x' for s in speed_factors)} complete.")
+            print(f"Saved: {video_path}")
 
 if __name__ == "__main__":
     main()
