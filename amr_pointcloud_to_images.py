@@ -18,8 +18,8 @@ def main():
     lidar_overlay_folder_name = "lidar_overlay"
       
     # Processing parameters
-    sample_size = 1000  # upper sampling bound, set to "" for all frames
-    frame_step = 10
+    sample_size = 500  # upper sampling bound, set to "" for all frames
+    frame_step = 3
     time_step = 0.0333333351*frame_step
     
     # Load and process data
@@ -30,7 +30,7 @@ def main():
     create_lidar_overlay_images(json_files, save_path, lidar_overlay_folder_name, path_to_images, class_def)
 
     # Create overlay videos for each AMR
-    create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"), speed_factors=[1.0, 2.0])
+    create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"), time_step, speed_factors=[1.0, 2.0])
 
 
 def load_class_definitions(filepath):
@@ -82,15 +82,20 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
     """ CAMERA_HEIGHT = 0.12; this is not needed since globalPosition data already contains this information"""
 
     # Step 1: Extract camera information
+    global_proj_matrix = None
     width, height = 1280, 720  # Default
     
     for frame_data in json_files:
-        cameras = [c for c in frame_data.get("captures", [])
+        cameras = [c for c in frame_data.get("captures", []) 
                  if c.get('@type', '').endswith('RGBCamera')]
         if cameras:
+            global_proj_matrix = cameras[0].get("matrix")
             width, height = cameras[0].get("dimension", [1280, 720])
             break
     
+    if global_proj_matrix is None:
+        raise ValueError("No camera found in JSON files!")
+
     # Step 2: Using vertical FOV = 60 degrees to build camera matrix
     vertical_fov = 60  # in degrees
     aspect_ratio = width / height
@@ -112,19 +117,10 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
         [0, -f_y, cy], 
         [0, 0, 1]
     ])
-    """
-    K = np.array([
-        [623.538, 0, 640],
-        [0, -250, 400], 
-        [0, 0, 1]
-    ])
-    """
 
     print(f"\nCamera Intrinsic Matrix K:\n{K}")
 
     # Step3: Frame processing
-    timestamps = []
-
     for frame_idx, frame_data in enumerate(tqdm(json_files, desc="Processing frames", unit="frame")):
         cameras = [c for c in frame_data.get("captures", []) 
                   if c.get('@type', '').endswith('RGBCamera')]
@@ -156,6 +152,7 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2, cv2.LINE_AA)
             cv2.putText(overlay, f"AMR: {amr_id}", (20, 70), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2, cv2.LINE_AA)
+            
 
             # Get camera pose (3D)
             cam_pos = np.array(camera["globalPosition"])
@@ -232,19 +229,11 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
             output = cv2.addWeighted(overlay, 0.7, img, 0.3, 0)
             output_path = os.path.join(save_path, overlay_folder_name, f"lidar_overlay_{os.path.splitext(img_filename)[0]}.png")
             cv2.imwrite(output_path, output)
-        timestamps.append(str(timestamp))
-
-    with open("timestamps.txt", "w") as f:
-        f.write("\n".join(timestamps))
     print("\nImage overlay complete!")
 
-def create_videos_per_amr(image_folder, output_folder, fps=30, speed_factors=[1.0, 1.25, 1.5, 2.0]):
-    """Create videos at different playback speeds for each AMR.
-    
-    Args:
-        image_folder: Path to folder containing overlay images
-        output_folder: Path to save output videos
-        fps: Base frames per second
+def create_videos_per_amr(image_folder, output_folder, time_step, speed_factors=[1.0, 1.25, 1.5, 2.0]):
+    """    
+        time_step: Time between frames in seconds (from the main processing parameters)
         speed_factors: List of playback speed multipliers (1x, 1.25x, etc.)
     """
     os.makedirs(output_folder, exist_ok=True)
@@ -269,6 +258,9 @@ def create_videos_per_amr(image_folder, output_folder, fps=30, speed_factors=[1.
         
     print(f"Found {len(amr_groups)} AMRs: {list(amr_groups.keys())}")
 
+    # Calculate base frame rate based on time_step (real-time playback)
+    base_fps = (1.0*1/3) / time_step
+
     # Create video for each AMR at different speeds
     for amr_id, files in amr_groups.items():
         # Natural sort to ensure correct frame order
@@ -276,7 +268,7 @@ def create_videos_per_amr(image_folder, output_folder, fps=30, speed_factors=[1.
         if not files:
             continue
 
-        print(f"\nProcessing AMR '{amr_id}' with {len(files)} frames")
+        print(f"Processing AMR '{amr_id}' with {len(files)} frames")
         
         first_image_path = os.path.join(image_folder, files[0])
         frame = cv2.imread(first_image_path)
@@ -289,12 +281,12 @@ def create_videos_per_amr(image_folder, output_folder, fps=30, speed_factors=[1.
         # Create videos at different speeds
         for speed_factor in speed_factors:
             # Adjust FPS for different playback speeds
-            effective_fps = fps * speed_factor
+            effective_fps = base_fps * speed_factor
             
             video_path = os.path.join(output_folder, f"{amr_id}_speed_{speed_factor:.2f}x.mp4")
             out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), effective_fps, (width, height))
 
-            print(f"Creating video for {amr_id} at {effective_fps:.2f} FPS with {len(files)} frames...")
+            print(f"Creating video for {amr_id} at {speed_factor:.2f}x speed with {len(files)} frames...")
             
             for fname in tqdm(files, desc=f"Writing {amr_id} at {speed_factor:.2f}x"):
                 img = cv2.imread(os.path.join(image_folder, fname))
@@ -303,8 +295,8 @@ def create_videos_per_amr(image_folder, output_folder, fps=30, speed_factors=[1.
                     continue
                     
                 # Add speed indicator to the frame
-                fps_text = f"FPS: {effective_fps:.2f}"
-                cv2.putText(img, fps_text, (width - 200, height - 30), 
+                speed_text = f"Playback: {speed_factor:.2f}x"
+                cv2.putText(img, speed_text, (width - 200, height - 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
                 
                 out.write(img)
