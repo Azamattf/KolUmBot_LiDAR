@@ -64,7 +64,7 @@ Workflow: Sets dataset path --> Calls `load_json_files()` to process JSON files 
   - MP4 output with H.264 encoding
 
 ## Usage notes
-- Adjust frame_step to control animation smoothness vs performance. Larger frame_step values will process faster but produce less smooth animations
+- Adjust `frame_step` to control animation smoothness vs performance. Larger `frame_step` values will process faster but produce less smooth animations
 - Change `solo_nr` to select different datasets
 - Adjust `time_interval` for playback speed
 - Modify colors in `color_map`
