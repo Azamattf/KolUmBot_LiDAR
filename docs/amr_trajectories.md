@@ -19,18 +19,8 @@ This script visualizes the movement trajectories of Autonomous Mobile Robots (AM
 - matplotlib animation saved as an MP4 file
 
 ## Functions
-main()
-Purpose: Main execution function
-Parameters: None
-Workflow:
-
-Sets dataset path (currently hardcoded)
-
-Calls load_json_files() to process JSON files
-
-Calls read_positions() to extract robot positions
-
-Calls animate_robots() to create and save animation
+###`main()`
+Workflow: Sets dataset path --> Calls `load_json_files()` to process JSON files --> Calls `read_positions()` to extract robot positions --> Calls `animate_robots()` to create and save animation
 
 load_json_files(path_to_jsons, frame_step)
 Purpose: Loads and samples JSON files
