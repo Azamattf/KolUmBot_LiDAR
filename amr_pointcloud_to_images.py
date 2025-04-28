@@ -18,8 +18,8 @@ def main():
     lidar_overlay_folder_name = "lidar_overlay"
       
     # Processing parameters
-    sample_size = 500  # upper sampling bound, set to "" for all frames
-    frame_step = 3
+    sample_size = 1000  # upper sampling bound, set to "" for all frames
+    frame_step = 10
     time_step = 0.0333333351*frame_step
     
     # Load and process data
@@ -31,7 +31,6 @@ def main():
 
     # Create overlay videos for each AMR
     create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"), time_step, speed_factors=[1.0, 2.0])
-
 
 def load_class_definitions(filepath):
     with open(filepath, 'r') as f:
@@ -259,7 +258,7 @@ def create_videos_per_amr(image_folder, output_folder, time_step, speed_factors=
     print(f"Found {len(amr_groups)} AMRs: {list(amr_groups.keys())}")
 
     # Calculate base frame rate based on time_step (real-time playback)
-    base_fps = (1.0*1/3) / time_step
+    base_fps = 1.0 / time_step
 
     # Create video for each AMR at different speeds
     for amr_id, files in amr_groups.items():
