@@ -21,7 +21,6 @@ def main():
     path_to_dataset = "d:\\Works_Experience\\FML_Florian\\Kolumbot\\Lidar_visualization\\Unity_v3s\\"
     path_to_images = os.path.join(path_to_dataset, "sequence.0_json_only")
     save_path = os.path.join(path_to_dataset, "Export")
-    path_to_sem_def = os.path.join(path_to_dataset, "class_definition_semantic_segmentation.json")
       
     # Process JSON files
 
