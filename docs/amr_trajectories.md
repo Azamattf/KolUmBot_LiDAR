@@ -16,11 +16,9 @@ This script visualizes the movement trajectories of Autonomous Mobile Robots (AM
   - Robot identification (AMR IDs)
 
 ## Output
-Interactive matplotlib animation (displayed in notebook)
+- matplotlib animation saved as an MP4 file
 
-Optional MP4 video file of the animation
-
-Functions
+## Functions
 main()
 Purpose: Main execution function
 Parameters: None
