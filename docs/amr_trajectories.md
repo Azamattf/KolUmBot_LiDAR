@@ -1,9 +1,6 @@
 # amr_trajectories.py
 This script visualizes the movement trajectories of Autonomous Mobile Robots (AMRs) by processing JSON files containing position data and creating an animated 2D plot in x-y plane converted from the Unity's x-z plane. The animation shows each robot's path over time with markers indicating their current positions.
 
-## Overview
-This script visualizes the movement trajectories of Autonomous Mobile Robots (AMRs) by processing JSON files containing position data and creating an animated 2D plot. The animation shows each robot's path over time with markers indicating their current positions.
-
 ## Key Features
 * Processes JSON files containing robot position data
 * Extracts and plots 2D trajectories (x-z coordinates from 3D positions)
@@ -12,16 +9,13 @@ This script visualizes the movement trajectories of Autonomous Mobile Robots (AM
 * Includes progress tracking during processing
 
 ## Input Requirements
-A directory containing JSON files from Unity simulation captures
-Each JSON file should contain:
+- A directory containing JSON files from Unity simulation captures
+- From each JSON file:
+  - Timestamp information
+  - Robot position data (globalPosition)
+  - Robot identification (AMR IDs)
 
-Timestamp information
-
-Robot position data (globalPosition)
-
-Robot identification (AMR IDs)
-
-Output
+## Output
 Interactive matplotlib animation (displayed in notebook)
 
 Optional MP4 video file of the animation
