@@ -9,7 +9,7 @@ The data is stored as JSON files and images generated via AMR simulation in the 
 [Sample JSON file](sample_frame_data.json)
 
 ## Components of the repo
-The various python codes process and manipulate the data and create graphs and animations for analysis purposes.
+The various python codes process and manipulate the data and create graphs and animations for analysis purposes. The scripts are mostly independent from one another because each of them accomplish different analsysis tasks.
 The breakdown of the those components can be found in the [docs folder](docs).
 
 ## Current Development
