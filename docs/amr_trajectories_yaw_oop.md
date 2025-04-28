@@ -1,4 +1,4 @@
-# `amr_trajectories_yaw_oop`
+# `amr_trajectories_yaw_oop.py`
 This object-oriented script visualizes Autonomous Mobile Robot (AMR) trajectories with yaw direction in an interactive Plotly animation saved as an HTML file.
 
 ## Requirements
