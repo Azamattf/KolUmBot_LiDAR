@@ -44,7 +44,7 @@ Workflow: Sets dataset path --> Calls `load_json_files()` to process JSON files 
 - Returns:
   - Dictionary of robot positions: `{robot_id: [(timestamp, x, y), ...]}`
 -  Features:
-  - Extracts front lidar positions as robot locations
+  - front lidar positions as robot locations
   - Converts 3D positions to 2D (x-z plane)
   - Handles missing position data
 
