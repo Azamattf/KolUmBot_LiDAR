@@ -9,20 +9,6 @@ This script processes Unity simulation output (stored as JSON step files) to:
 
 ---
 
-## Project Structure
-
-```plaintext
-project/
-├── your_script.py
-├── quaternion2euler.py
-├── dataset/
-│   ├── sequence.0_json_only/   # Folder with JSON step files
-│   └── class_definition_semantic_segmentation.json
-├── Export/                     # Output CSV files
-```
-
----
-
 ## Requirements
 
 - Python 3.8+
@@ -62,7 +48,7 @@ project/
 
 ---
 
-## 📤 Output CSV Structure
+## Output CSV Structure
 
 The output file `AMR_Check_Yaw.csv` contains:
 
@@ -73,39 +59,14 @@ The output file `AMR_Check_Yaw.csv` contains:
 
 ---
 
-## ⚠️ Notes
+## Notes
 
-- Only JSON objects of type `type.custom/solo.2DLidar` with `'front'` in their ID are processed.
+- Only JSON objects of type `type.custom/solo.2DLidar` with `'front'` in their ID are processed to avoid duplicates since, in this simulation case, the same AMR pose information is included in all LiDAR sensors installed on a single robot.
 - Unity quaternions have a different axis convention than ROS quaternions. This is handled in `unity_quaternion_to_ros_yaw`.
 - The script skips frames with unreadable or corrupt JSON files.
-
----
-
-## 🛠️ Customization
-
 - To change how many frames you sample (e.g., every frame, every second frame), modify:
 
 ```python
 frame_step = 1  # Process every frame
 ```
-
-- To change the save filename, edit inside `save_robot_positions_to_csv()`.
-
 ---
-
-## 📈 Example Usage Flow
-
-```mermaid
-flowchart TD
-    A[Start] --> B[Load JSON files]
-    B --> C[Extract yaw info]
-    C --> D[Calculate yaw from quaternion]
-    D --> E[Group by robot]
-    E --> F[Save to CSV]
-    F --> G[Done!]
-```
-
----
-
-# ✅ That's it!
-This script helps **verify orientation tracking** in mobile robot simulations by comparing Unity's stored yaw data and recalculated yaw from quaternions.
