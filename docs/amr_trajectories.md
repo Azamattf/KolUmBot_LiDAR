@@ -63,44 +63,13 @@ Workflow: Sets dataset path --> Calls `load_json_files()` to process JSON files 
   - Progress bar during video rendering
   - MP4 output with H.264 encoding
 
-## Usage Instructions
-Set the correct path_to_dataset for your environment
-
-Adjust frame_step to control animation smoothness vs performance
-
-Run the script: python amr_trajectories.py
-
-The animation will display and optionally save to MP4
-
-Customization Options
-Change solo_nr to select different datasets
-
-Adjust time_interval for playback speed
-
-Modify colors in color_map
-
-Change video encoding parameters in FFMpegWriter
-
-Adjust figure size and DPI for output quality
+## Usage notes
+- Adjust frame_step to control animation smoothness vs performance. Larger frame_step values will process faster but produce less smooth animations
+- Change `solo_nr` to select different datasets
+- Adjust `time_interval` for playback speed
+- Modify colors in `color_map`
 
 ## Dependencies
-Python 3.x
-
-Required packages:
-
-os, json, glob, itertools
-
-natsort, tqdm, numpy
-
-matplotlib (with FFMpegWriter support)
-
-IPython (for notebook display)
-
-
-
-Performance Notes
-Larger frame_step values will process faster but produce less smooth animations
-
-Video rendering may take significant time for large datasets
-
-Ensure FFmpeg is installed for MP4 output
+- Python 3.x
+- Required packages: os, json, glob, itertools, natsort, tqdm, numpy, matplotlib (with FFMpegWriter support)
+- Ensure FFmpeg is installed for MP4 output
