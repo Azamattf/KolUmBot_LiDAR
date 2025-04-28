@@ -110,7 +110,7 @@ def read_positions(data):
 
 # In[5]:
 
-def animate_robots(robot_positions, time_interval, save_path=None, frame_step=5):
+def animate_robots(robot_positions, time_interval, save_path, frame_step=5):
     # Set up the figure size for the video
     fig, ax = plt.subplots()
 
@@ -147,7 +147,6 @@ def animate_robots(robot_positions, time_interval, save_path=None, frame_step=5)
 
     max_frames = len(timestamps)
     
-    # Remove the progress bar creation from here
     def update(frame):
         """ Update function for animation """
         if frame >= max_frames:
@@ -164,25 +163,22 @@ def animate_robots(robot_positions, time_interval, save_path=None, frame_step=5)
                     robot_traces[robot_id].set_data(x_data, y_data)
                     robot_markers[robot_id].set_data([x_data[-1]], [y_data[-1]])
                     artists.extend([robot_traces[robot_id], robot_markers[robot_id]])
-        # Remove the progress bar update from here
         return artists
 
     # Create the animation
     anim = FuncAnimation(fig, update, frames=max_frames, interval=time_interval * 1000, blit=False, repeat=False)
 
-    # Save the animation if a save path is provided
-    if save_path:
-        if not save_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
-            save_path += ".mp4"
-        print(f"\nSaving animation to {save_path}...")
-        
-        # Create a progress callback
-        progress_callback = lambda i, n: progress_bar.update(1)
-        
-        with tqdm(total=max_frames, desc="Saving Animation", ncols=100, unit="frame") as progress_bar:
-            writer = FFMpegWriter(fps=10, bitrate=1800, extra_args=['-vcodec', 'libx264'])
-            anim.save(save_path, writer=writer, dpi=200, progress_callback=progress_callback)
-        print("✅ Video saved successfully!\n")
+    if not save_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
+        save_path += ".mp4"
+    print(f"\nSaving animation to {save_path}...")
+    
+    # Create a progress callback
+    progress_callback = lambda i, n: progress_bar.update(1)
+    
+    with tqdm(total=max_frames, desc="Saving Animation", ncols=100, unit="frame") as progress_bar:
+        writer = FFMpegWriter(fps=10, bitrate=1800, extra_args=['-vcodec', 'libx264'])
+        anim.save(save_path, writer=writer, dpi=200, progress_callback=progress_callback)
+    print("✅ Video saved successfully!\n")
     plt.show()
 
 

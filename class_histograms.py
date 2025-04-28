@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # coding: utf-8
 
 # # Create _static_ histograms of object classes for each RGB camera from JSON step files
