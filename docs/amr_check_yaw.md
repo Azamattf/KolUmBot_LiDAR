@@ -4,6 +4,7 @@
 This script processes Unity simulation output (stored as JSON step files) to:
 - Extract the yaw (rotation around the Z-axis) of AMRs.
 - Compare the **given yaw** from JSON with the **calculated yaw** from quaternions.
+- Calculation of yaw from quaternions is accomplished using the included `quaternion2euler.py` script.
 - Save the extracted yaw data into a **CSV file** for further analysis.
 
 ---
@@ -25,23 +26,13 @@ project/
 ## Requirements
 
 - Python 3.8+
-- Packages:
-  - `numpy`
-  - `pandas`
-  - `plotly`
-  - `natsort`
-  - `tqdm`
+- Packages: `numpy`, `pandas`, `plotly`, `natsort`, `tqdm`
 
-## 🚀 How to Run
+## Workflow
 
-1. **Set the dataset path** in the script (`path_to_dataset`).
+1. Set the dataset path in the script (`path_to_dataset`).
 2. Make sure your JSON files are available in the `sequence.0_json_only` folder.
-3. Execute:
-
-```bash
-python your_script.py
-```
-
+3. Execute the script
 4. The output CSV file will be saved to:
 
 ```
@@ -50,15 +41,15 @@ python your_script.py
 
 ---
 
-## 📚 Main Components
+## Functions
 
 ### `main()`
 - Defines data paths.
 - Loads JSON files and processes them.
 
 ### `load_json_files(path_to_jsons, frame_step)`
-- Loads and optionally samples JSON files based on the frame step.
-- Handles decoding errors gracefully.
+- Loads and samples JSON files based on the frame step.
+- Handles decoding errors.
 
 ### `unity_quaternion_to_ros_yaw(q_unity)`
 - Converts a Unity quaternion `(x, y, z, w)` to a **ROS-style** yaw (Euler Z angle).
