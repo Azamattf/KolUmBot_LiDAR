@@ -4,9 +4,9 @@ This repo is part of the KulUmBot project led by Florian Spiegel, M.Sc., at the 
 ## Data
 The data is stored as JSON files and images generated via AMR simulation in the Unity environment. Each JSON file is a "snapshot" in time marked with a timestamp and contain RGB camera and/or LiDAR data. Data represents one or more camera and LiDAR sensors mounted on each AMR. Note that not all JSON files contain both camera and LiDAR data since these two sensors have different sampling frequencies.
 
-[Sample JSON file](sample_AMR_1_camera.png)
+[Sample camera image](sample_AMR_1_camera.png)
 
-[Sample camera image](sample_frame_data.json)
+[Sample JSON file](sample_frame_data.json)
 
 ## Components of the repo
 The various python codes process and manipulate the data and create graphs and animations for analysis purposes.
