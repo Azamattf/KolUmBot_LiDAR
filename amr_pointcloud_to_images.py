@@ -18,18 +18,19 @@ def main():
     lidar_overlay_folder_name = "lidar_overlay"
       
     # Processing parameters
-    sample_size = 500  # upper sampling bound, set to "" for all frames
+    sample_size = 1000  # upper sampling bound, set to "" for all frames
     frame_step = 10
+    time_step = 0.0333333351*frame_step
     
     # Load and process data
     json_files = load_json_files(path_to_images, sample_size, frame_step)
     class_def = load_class_definitions(path_to_sem_def)
     
     # Process each frame to create pointcloud-overlaid images
-    frame_timestamps = create_lidar_overlay_images(json_files, save_path, lidar_overlay_folder_name, path_to_images, class_def)
+    create_lidar_overlay_images(json_files, save_path, lidar_overlay_folder_name, path_to_images, class_def)
 
     # Create overlay videos for each AMR
-    create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"), frame_timestamps, speed_factors=[1.0])
+    create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"), time_step, speed_factors=[1.0, 2.0])
 
 def load_class_definitions(filepath):
     with open(filepath, 'r') as f:
@@ -72,10 +73,8 @@ def load_json_files(path_to_jsons, sample_size, frame_step):
     return data
 
 def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path_to_images, class_def, point_size=3):
+    """Create images with properly projected LiDAR points following perspective."""
     os.makedirs(os.path.join(save_path, "lidar_overlay"), exist_ok=True)
-    
-    # Dictionary to store processed frames with their timestamps
-    processed_frames = {}
     
     # Sensor heights (in meters)
     LIDAR_HEIGHT = 0.14
@@ -120,9 +119,6 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
 
     print(f"\nCamera Intrinsic Matrix K:\n{K}")
 
-    # Store timestamps and camera info for each processed frame
-    frame_info = {}
-    
     # Step3: Frame processing
     for frame_idx, frame_data in enumerate(tqdm(json_files, desc="Processing frames", unit="frame")):
         cameras = [c for c in frame_data.get("captures", []) 
@@ -130,15 +126,13 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
         lidars = [l for l in frame_data.get("captures", [])
                  if l.get('@type') == 'type.custom/solo.2DLidar']
         
-        timestamp = frame_data.get("timestamp", 0)
-        
         if not cameras or not lidars:
             continue
 
         for camera in cameras:
         
             camera_id = camera.get("id", "")
-            amr_id = f"AMR_{camera_id.split('_')[1]}"
+            amr_id = f"AMR_{camera_id.split("_")[1]}"
             
             img_filename = camera.get("filename", "")
             if not img_filename:
@@ -152,6 +146,7 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
             overlay = img.copy()
             
             # Add timestamp
+            timestamp = frame_data.get("timestamp", 0)
             cv2.putText(overlay, f"Time: {timestamp:.2f}s", (20, 40), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2, cv2.LINE_AA)
             cv2.putText(overlay, f"AMR: {amr_id}", (20, 70), 
@@ -204,7 +199,7 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
                     points_2d = points_2d[valid]
                     classes = np.array(classes)[valid]
                     
-                    # Draw points
+                    # Draw points (they should now follow perspective)
                     for (x, y), cls in zip(points_2d, classes):
                         color = class_def.get(cls, 'rgba(255,0,0,1)')
                         color_rgb = tuple(int(x) for x in color.split('(')[1].split(')')[0].split(',')[:3])
@@ -233,23 +228,11 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
             output = cv2.addWeighted(overlay, 0.7, img, 0.3, 0)
             output_path = os.path.join(save_path, overlay_folder_name, f"lidar_overlay_{os.path.splitext(img_filename)[0]}.png")
             cv2.imwrite(output_path, output)
-            
-            # Save timestamp with the output filename
-            output_basename = os.path.basename(output_path)
-            frame_info[output_basename] = {
-                "timestamp": timestamp,
-                "amr_id": amr_id
-            }
-    
     print("\nImage overlay complete!")
-    return frame_info
 
-def create_videos_per_amr(image_folder, output_folder, frame_info, speed_factors=[1.0, 1.25, 1.5, 2.0]):
+def create_videos_per_amr(image_folder, output_folder, time_step, speed_factors=[1.0, 1.25, 1.5, 2.0]):
     """    
-    Creates videos for each AMR using actual timestamps from the processed frames
-    
-    Args:
-        frame_info: Dictionary mapping filenames to timestamp and AMR info
+        time_step: Time between frames in seconds (from the main processing parameters)
         speed_factors: List of playback speed multipliers (1x, 1.25x, etc.)
     """
     os.makedirs(output_folder, exist_ok=True)
@@ -265,14 +248,17 @@ def create_videos_per_amr(image_folder, output_folder, frame_info, speed_factors
         if len(parts) < 2:
             continue
             
-        amr_part = parts[1]  # "AMR_3_camera"
+        amr_part = parts[1]  # This should be "AMR_3_camera" in your example
         if amr_part.startswith("AMR_"):
             # Extract just the AMR ID (e.g., "AMR_3")
             amr_id = amr_part.split('_')[:2]
             amr_id = '_'.join(amr_id)  # Joins ["AMR", "3"] to "AMR_3"
             amr_groups[amr_id].append(filename)
-    
+        
     print(f"Found {len(amr_groups)} AMRs: {list(amr_groups.keys())}")
+
+    # Calculate base frame rate based on time_step (real-time playback)
+    base_fps = 1.0 / time_step
 
     # Create video for each AMR at different speeds
     for amr_id, files in amr_groups.items():
@@ -283,36 +269,7 @@ def create_videos_per_amr(image_folder, output_folder, frame_info, speed_factors
 
         print(f"Processing AMR '{amr_id}' with {len(files)} frames")
         
-        # Extract timestamps for this AMR's frames
-        timestamps = []
-        valid_files = []
-        
-        for filename in files:
-            if filename in frame_info:
-                timestamps.append(frame_info[filename]["timestamp"])
-                valid_files.append(filename)
-            else:
-                print(f"Warning: No timestamp info for {filename}")
-        
-        if not valid_files:
-            print(f"No valid frames with timestamps for AMR {amr_id}, skipping")
-            continue
-        
-        # Calculate actual time steps between frames
-        time_diffs = np.diff(timestamps)
-        if len(time_diffs) == 0:
-            print(f"Not enough frames with timestamps for AMR {amr_id}, skipping")
-            continue
-            
-        # Calculate median time difference for more robust FPS estimation
-        median_time_diff = np.median(time_diffs)
-        print(f"Median time between frames for {amr_id}: {median_time_diff:.4f}s")
-        
-        # Calculate base frame rate from actual timestamps (real-time playback)
-        base_fps = 1.0 / median_time_diff if median_time_diff > 0 else 30.0
-        print(f"Base FPS for {amr_id}: {base_fps:.2f}")
-        
-        first_image_path = os.path.join(image_folder, valid_files[0])
+        first_image_path = os.path.join(image_folder, files[0])
         frame = cv2.imread(first_image_path)
         if frame is None:
             print(f"Warning: Could not read image {first_image_path}")
@@ -328,9 +285,9 @@ def create_videos_per_amr(image_folder, output_folder, frame_info, speed_factors
             video_path = os.path.join(output_folder, f"{amr_id}_speed_{speed_factor:.2f}x.mp4")
             out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), effective_fps, (width, height))
 
-            print(f"Creating video for {amr_id} at {speed_factor:.2f}x speed ({effective_fps:.2f} FPS)")
+            print(f"Creating video for {amr_id} at {speed_factor:.2f}x speed with {len(files)} frames...")
             
-            for fname in tqdm(valid_files, desc=f"Writing {amr_id} at {speed_factor:.2f}x"):
+            for fname in tqdm(files, desc=f"Writing {amr_id} at {speed_factor:.2f}x"):
                 img = cv2.imread(os.path.join(image_folder, fname))
                 if img is None:
                     print(f"Warning: Could not read image {fname}")
