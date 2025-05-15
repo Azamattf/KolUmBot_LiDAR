@@ -18,8 +18,8 @@ def main():
     lidar_overlay_folder_name = "lidar_overlay"
       
     # Processing parameters
-    sample_size = 500  # upper sampling bound, set to "" for all frames
-    frame_step = 10
+    sample_size = ""  # upper sampling bound; set to "" for all frames
+    frame_step = 5
     
     # Load and process data
     json_files = load_json_files(path_to_images, sample_size, frame_step)
@@ -29,7 +29,7 @@ def main():
     frame_timestamps = create_lidar_overlay_images(json_files, save_path, lidar_overlay_folder_name, path_to_images, class_def)
 
     # Create overlay videos for each AMR
-    create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"), frame_timestamps, speed_factors=[1.0])
+    create_videos_per_amr(os.path.join(save_path, lidar_overlay_folder_name), os.path.join(save_path, "videos"), frame_timestamps, speed_factors=[1,4])
 
 def load_class_definitions(filepath):
     with open(filepath, 'r') as f:
@@ -49,6 +49,8 @@ def load_class_definitions(filepath):
 
 def load_json_files(path_to_jsons, sample_size, frame_step):
     """Load JSON files from the specified directory with given frame step."""
+    
+    print("\nStep 1. Loading files")
     data = []
     json_files = [f for f in natsorted(os.listdir(path_to_jsons)) if f.endswith(".json")]
     sample_size = int(sample_size) if str(sample_size).isdigit() else len(json_files)
@@ -75,7 +77,6 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
     os.makedirs(os.path.join(save_path, "lidar_overlay"), exist_ok=True)
     
     # Dictionary to store processed frames with their timestamps
-    processed_frames = {}
     
     # Sensor heights (in meters)
     LIDAR_HEIGHT = 0.14
@@ -118,12 +119,13 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
         [0, 0, 1]
     ])
 
-    print(f"\nCamera Intrinsic Matrix K:\n{K}")
+    print(f"\nStep 2. Camera Intrinsic Matrix K:\n{K}")
 
     # Store timestamps and camera info for each processed frame
     frame_info = {}
     
     # Step3: Frame processing
+    print("\nStep 3. Frame processing")
     for frame_idx, frame_data in enumerate(tqdm(json_files, desc="Processing frames", unit="frame")):
         cameras = [c for c in frame_data.get("captures", []) 
                   if c.get('@type', '').endswith('RGBCamera')]
@@ -244,7 +246,7 @@ def create_lidar_overlay_images(json_files, save_path, overlay_folder_name, path
     print("\nImage overlay complete!")
     return frame_info
 
-def create_videos_per_amr(image_folder, output_folder, frame_info, speed_factors=[1.0, 1.25, 1.5, 2.0]):
+def create_videos_per_amr(image_folder, output_folder, frame_info, speed_factors=[1.0, 2.0, 4.0]):
     """    
     Creates videos for each AMR using actual timestamps from the processed frames
     
@@ -252,6 +254,7 @@ def create_videos_per_amr(image_folder, output_folder, frame_info, speed_factors
         frame_info: Dictionary mapping filenames to timestamp and AMR info
         speed_factors: List of playback speed multipliers (1x, 1.25x, etc.)
     """
+    print("\nStep 4. Video creation")
     os.makedirs(output_folder, exist_ok=True)
     amr_groups = defaultdict(list)
 
@@ -272,7 +275,7 @@ def create_videos_per_amr(image_folder, output_folder, frame_info, speed_factors
             amr_id = '_'.join(amr_id)  # Joins ["AMR", "3"] to "AMR_3"
             amr_groups[amr_id].append(filename)
     
-    print(f"Found {len(amr_groups)} AMRs: {list(amr_groups.keys())}")
+    print(f"\nFound {len(amr_groups)} AMRs: {list(amr_groups.keys())}")
 
     # Create video for each AMR at different speeds
     for amr_id, files in amr_groups.items():
@@ -281,7 +284,7 @@ def create_videos_per_amr(image_folder, output_folder, frame_info, speed_factors
         if not files:
             continue
 
-        print(f"Processing AMR '{amr_id}' with {len(files)} frames")
+        print(f"\nProcessing AMR '{amr_id}' with {len(files)} frames")
         
         # Extract timestamps for this AMR's frames
         timestamps = []
@@ -292,7 +295,7 @@ def create_videos_per_amr(image_folder, output_folder, frame_info, speed_factors
                 timestamps.append(frame_info[filename]["timestamp"])
                 valid_files.append(filename)
             else:
-                print(f"Warning: No timestamp info for {filename}")
+                continue
         
         if not valid_files:
             print(f"No valid frames with timestamps for AMR {amr_id}, skipping")
